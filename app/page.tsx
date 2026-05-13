@@ -6,17 +6,26 @@
 //          ▲                       │
 //          └────── Back ───────────┴── error ──▶ back to "map"
 //
-// State is mirrored to URL search params so a deep link reopens the same
-// bbox + print spec.
+// State model:
+//   - `shape` (rectangle | circle | hexagon), `rotation` (degrees), and
+//     `size.widthInches` / `size.heightInches` (shape's pre-rotation
+//     dimensions in inches) describe the model footprint.
+//   - `bbox` is the axis-aligned geographic bbox containing the rotated
+//     shape — the area the elevation API samples. It's kept in sync with
+//     the shape parameters; the user manipulates the SHAPE on the map,
+//     and the bbox AABB follows.
+//   - URL search params mirror this state so a deep link reopens the
+//     same view.
 
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import SearchBar from "@/components/SearchBar";
+import ShapeControls from "@/components/ShapeControls";
 import SizeControls, { type SizeState } from "@/components/SizeControls";
 import {
   bboxCenter,
-  bboxFromCenter,
+  bboxFromCenterWH,
   bboxWidthMeters,
   snapBboxToAspect,
 } from "@/lib/bbox";
@@ -24,6 +33,11 @@ import type {
   ElevationRequest,
   ElevationResponse,
 } from "@/lib/elevation/types";
+import {
+  HEX_FLAT_TO_LONG,
+  shapeAABBHalf,
+  type Shape,
+} from "@/lib/shape";
 import type { Bbox, LngLat, SearchResult } from "@/lib/types";
 import { decodeUrlState, syncUrl } from "@/lib/url-state";
 
@@ -46,23 +60,53 @@ const ModelViewer = dynamic(() => import("@/components/ModelViewer"), {
 });
 
 const DEFAULT_CENTER: LngLat = [-72.5, 44.93];
+const DEFAULT_SHAPE_WIDTH_METERS = 5_000;
 const DEFAULT_GRID_SIZE = 256;
 
 type View = "map" | "loading" | "viewer";
 
-/**
- * Snapshot captured when entering "viewer". The 3D scene is bound to
- * these values — if the user keeps tweaking the sidebar controls after
- * generating, the visualization stays consistent with the elevation
- * grid that was actually fetched. Only base thickness and vertical
- * exaggeration are live-tunable; everything else needs a Regenerate.
- */
 interface ViewerSnapshot {
   bbox: Bbox;
+  shape: Shape;
+  rotation: number;
   widthInches: number;
   heightInches: number;
   data: ElevationResponse;
   label?: string;
+}
+
+/** Helper: build the geographic AABB for the current shape at the given scale. */
+function bboxForShape(
+  center: LngLat,
+  shape: Shape,
+  widthInches: number,
+  heightInches: number,
+  rotation: number,
+  metersPerInch: number,
+): Bbox {
+  const [halfWIn, halfHIn] = shapeAABBHalf(
+    shape,
+    widthInches,
+    heightInches,
+    rotation,
+  );
+  return bboxFromCenterWH(
+    center,
+    halfWIn * 2 * metersPerInch,
+    halfHIn * 2 * metersPerInch,
+  );
+}
+
+/** Helper: extract current scale (m/in) from a bbox + shape state. */
+function scaleMPerIn(
+  bbox: Bbox,
+  shape: Shape,
+  widthInches: number,
+  heightInches: number,
+  rotation: number,
+): number {
+  const halfWIn = shapeAABBHalf(shape, widthInches, heightInches, rotation)[0];
+  return bboxWidthMeters(bbox) / (halfWIn * 2);
 }
 
 export default function Home() {
@@ -71,7 +115,10 @@ export default function Home() {
     heightInches: 6,
     baseThicknessInches: 0.25,
     verticalExaggeration: 2,
+    aspectLocked: true,
   });
+  const [shape, setShape] = useState<Shape>("rectangle");
+  const [rotation, setRotation] = useState(0);
   const [bbox, setBbox] = useState<Bbox | null>(null);
   const [flyTo, setFlyTo] = useState<LngLat | null>(null);
   const [label, setLabel] = useState<string | undefined>("Jay Peak");
@@ -79,11 +126,6 @@ export default function Home() {
   const [snapshot, setSnapshot] = useState<ViewerSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const didHydrateFromUrl = useRef(false);
-
-  const aspect = useMemo(
-    () => size.widthInches / size.heightInches,
-    [size.widthInches, size.heightInches],
-  );
 
   // --- Hydrate from URL on mount ---
   useEffect(() => {
@@ -93,31 +135,35 @@ export default function Home() {
     const url = new URL(window.location.href);
     const parsed = decodeUrlState(url.searchParams);
 
-    setSize((s) => ({
-      widthInches: parsed.widthInches ?? s.widthInches,
-      heightInches: parsed.heightInches ?? s.heightInches,
-      baseThicknessInches: parsed.baseThicknessInches ?? s.baseThicknessInches,
-      verticalExaggeration: parsed.verticalExaggeration ?? s.verticalExaggeration,
-    }));
+    const sh: Shape = parsed.shape ?? "rectangle";
+    const rot = sh === "circle" ? 0 : parsed.rotation ?? 0;
+    let w = parsed.widthInches ?? 6;
+    let h = parsed.heightInches ?? 6;
+    const locked = parsed.aspectLocked ?? true;
+    // Enforce shape-specific aspect on hydrate.
+    if (sh === "circle") h = w;
+    else if (sh === "hexagon") h = w * HEX_FLAT_TO_LONG;
+    else if (locked) h = w;
+
+    setShape(sh);
+    setRotation(rot);
+    setSize({
+      widthInches: w,
+      heightInches: h,
+      baseThicknessInches: parsed.baseThicknessInches ?? 0.25,
+      verticalExaggeration: parsed.verticalExaggeration ?? 2,
+      aspectLocked: locked,
+    });
     if (parsed.label) setLabel(parsed.label);
     if (parsed.bbox) {
       setBbox(parsed.bbox);
       setFlyTo(bboxCenter(parsed.bbox));
     } else {
-      setBbox(bboxFromCenter(DEFAULT_CENTER, 5_000, 1));
+      // Default: 5 km shape at the default center.
+      const metersPerInch = DEFAULT_SHAPE_WIDTH_METERS / w;
+      setBbox(bboxForShape(DEFAULT_CENTER, sh, w, h, rot, metersPerInch));
     }
   }, []);
-
-  // --- Refit bbox when aspect changes (after hydration) ---
-  useEffect(() => {
-    if (!didHydrateFromUrl.current) return;
-    setBbox((b) => {
-      if (!b) return b;
-      const center = bboxCenter(b);
-      const w = bboxWidthMeters(b);
-      return bboxFromCenter(center, w, aspect);
-    });
-  }, [aspect]);
 
   // --- Mirror state to URL whenever it stabilizes ---
   useEffect(() => {
@@ -125,26 +171,182 @@ export default function Home() {
     const timer = setTimeout(() => {
       syncUrl({
         bbox,
+        shape,
+        rotation,
         widthInches: size.widthInches,
         heightInches: size.heightInches,
         baseThicknessInches: size.baseThicknessInches,
         verticalExaggeration: size.verticalExaggeration,
+        aspectLocked: size.aspectLocked,
         label,
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [bbox, size, label]);
+  }, [bbox, shape, rotation, size, label]);
+
+  // All bbox refits are done inside the explicit handlers (handleShapeChange,
+  // handleSizeChange, etc.) since they already know the old state. We
+  // intentionally do NOT auto-refit in an effect — that would race with
+  // the handlers and compute scale from stale references.
+
+  // Memo "starting AABB aspect" so search snapping can use it.
+  const aabbAspect = useMemo(() => {
+    const [hW, hH] = shapeAABBHalf(
+      shape,
+      size.widthInches,
+      size.heightInches,
+      rotation,
+    );
+    return hW / hH;
+  }, [shape, size.widthInches, size.heightInches, rotation]);
 
   const handleSearch = (result: SearchResult) => {
     setLabel(result.displayName.split(",")[0]);
     setFlyTo(result.center);
-    setBbox(snapBboxToAspect(result.bbox, aspect, 5_000));
+    setBbox(snapBboxToAspect(result.bbox, aabbAspect, DEFAULT_SHAPE_WIDTH_METERS));
   };
 
-  const handleCoverageChange = (widthMeters: number) => {
+  /** "Box width (km)" — sets the SHAPE's real-world width. */
+  const handleShapeWidthMetersChange = (widthMeters: number) => {
     if (!bbox) return;
+    const newScale = widthMeters / size.widthInches;
     const center = bboxCenter(bbox);
-    setBbox(bboxFromCenter(center, widthMeters, aspect));
+    setBbox(
+      bboxForShape(
+        center,
+        shape,
+        size.widthInches,
+        size.heightInches,
+        rotation,
+        newScale,
+      ),
+    );
+  };
+
+  /** Translate the shape (drag-from-inside the overlay). */
+  const handleCenterChange = (newCenter: LngLat) => {
+    if (!bbox) return;
+    const scale = scaleMPerIn(
+      bbox,
+      shape,
+      size.widthInches,
+      size.heightInches,
+      rotation,
+    );
+    setBbox(
+      bboxForShape(
+        newCenter,
+        shape,
+        size.widthInches,
+        size.heightInches,
+        rotation,
+        scale,
+      ),
+    );
+  };
+
+  /** Corner / perimeter handle drag — sets new shape dimensions in inches. */
+  const handleShapeResize = (newWidthInches: number, newHeightInches: number) => {
+    if (!bbox) return;
+    // Enforce aspect lock for rectangles. The lock is equivalent to a
+    // projection of the un-constrained (W, H) drag onto the W = H line:
+    // both formulas agree on the average, so the simple form is right.
+    let w = newWidthInches;
+    let h = newHeightInches;
+    if (shape === "rectangle" && size.aspectLocked) {
+      const avg = (w + h) / 2;
+      w = avg;
+      h = avg;
+    }
+    const scale = scaleMPerIn(
+      bbox,
+      shape,
+      size.widthInches,
+      size.heightInches,
+      rotation,
+    );
+    const center = bboxCenter(bbox);
+    setBbox(bboxForShape(center, shape, w, h, rotation, scale));
+    setSize((s) => ({
+      ...s,
+      widthInches: w,
+      heightInches: h,
+    }));
+  };
+
+  const handleRotationChange = (newRotation: number) => {
+    if (!bbox) return;
+    const scale = scaleMPerIn(
+      bbox,
+      shape,
+      size.widthInches,
+      size.heightInches,
+      rotation,
+    );
+    const center = bboxCenter(bbox);
+    setRotation(newRotation);
+    setBbox(
+      bboxForShape(
+        center,
+        shape,
+        size.widthInches,
+        size.heightInches,
+        newRotation,
+        scale,
+      ),
+    );
+  };
+
+  /** Shape change — adjust heightInches per new shape rules; refit bbox. */
+  const handleShapeChange = (newShape: Shape) => {
+    if (!bbox) return;
+    const scale = scaleMPerIn(
+      bbox,
+      shape,
+      size.widthInches,
+      size.heightInches,
+      rotation,
+    );
+    let newW = size.widthInches;
+    let newH = size.heightInches;
+    let newRot = rotation;
+    if (newShape === "circle") {
+      newH = newW;
+      newRot = 0;
+    } else if (newShape === "hexagon") {
+      newH = newW * HEX_FLAT_TO_LONG;
+    } else if (size.aspectLocked) {
+      newH = newW;
+    }
+    setShape(newShape);
+    setRotation(newRot);
+    setSize((s) => ({ ...s, widthInches: newW, heightInches: newH }));
+    const center = bboxCenter(bbox);
+    setBbox(bboxForShape(center, newShape, newW, newH, newRot, scale));
+  };
+
+  const handleSizeChange = (newSize: SizeState) => {
+    if (!bbox) {
+      setSize(newSize);
+      return;
+    }
+    // Coercion: enforce shape-specific aspect.
+    let w = newSize.widthInches;
+    let h = newSize.heightInches;
+    if (shape === "circle") h = w;
+    else if (shape === "hexagon") h = w * HEX_FLAT_TO_LONG;
+    else if (newSize.aspectLocked) h = w;
+
+    const scale = scaleMPerIn(
+      bbox,
+      shape,
+      size.widthInches,
+      size.heightInches,
+      rotation,
+    );
+    const center = bboxCenter(bbox);
+    setBbox(bboxForShape(center, shape, w, h, rotation, scale));
+    setSize({ ...newSize, widthInches: w, heightInches: h });
   };
 
   const handleGenerate = async () => {
@@ -169,6 +371,8 @@ export default function Home() {
       const data = (await res.json()) as ElevationResponse;
       setSnapshot({
         bbox,
+        shape,
+        rotation,
         widthInches: size.widthInches,
         heightInches: size.heightInches,
         data,
@@ -201,11 +405,15 @@ export default function Home() {
 
         <SearchBar onSelect={handleSearch} />
 
+        <ShapeControls shape={shape} onChange={handleShapeChange} />
+
         <SizeControls
           size={size}
-          onChange={setSize}
+          shape={shape}
+          rotation={rotation}
+          onChange={handleSizeChange}
           bbox={bbox}
-          onCoverageChange={handleCoverageChange}
+          onShapeWidthMetersChange={handleShapeWidthMetersChange}
         />
 
         {view === "viewer" && snapshot && (
@@ -276,14 +484,21 @@ export default function Home() {
         {view !== "viewer" && (
           <MapPicker
             bbox={bbox}
-            aspect={aspect}
-            onBboxChange={setBbox}
+            shape={shape}
+            widthInches={size.widthInches}
+            heightInches={size.heightInches}
+            rotation={rotation}
+            onCenterChange={handleCenterChange}
+            onResize={handleShapeResize}
+            onRotationChange={handleRotationChange}
             flyTo={flyTo}
           />
         )}
         {view === "viewer" && snapshot && (
           <ModelViewer
             bbox={snapshot.bbox}
+            shape={snapshot.shape}
+            rotation={snapshot.rotation}
             data={snapshot.data}
             widthInches={snapshot.widthInches}
             heightInches={snapshot.heightInches}

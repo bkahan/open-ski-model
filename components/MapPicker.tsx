@@ -1,47 +1,53 @@
 "use client";
 
-// Interactive 2D map with a draggable / resizable bounding box.
+// Interactive 2D map with a directly-manipulable SHAPE on top.
 //
 // Mental model:
-//   - The map is a window onto Earth. We render it with MapLibre GL using
-//     plain OpenStreetMap raster tiles (no token required).
-//   - The bbox lives in geographic coordinates (lng/lat). On every map
-//     "move" event we re-project its corners to pixels and reposition the
-//     overlay <div> + handles on top of the canvas.
-//   - User interactions update the bbox in geographic coordinates, then we
-//     re-render. The map itself is "the truth"; the overlay is just a view.
-//
-// Phase 1 keeps the geometry simple: an axis-aligned rectangle (in lng/lat),
-// width-driven, with the height derived from a parent-supplied aspect ratio.
-// Phase 2 will hand the bbox to the elevation API and Babylon viewer.
-
-// maplibre-gl.css is imported from app/layout.tsx — keeping it there
-// guarantees it's bundled as a static stylesheet.
+//   - The shape (rectangle, circle, hexagon) lives in a model-plane frame
+//     centered at the shape's geographic center. Its pre-rotation
+//     dimensions are widthInches × heightInches; rotation is applied
+//     around the center.
+//   - The map's MapLibre canvas projects geographic coordinates to
+//     pixels. We use map.project / map.unproject to convert between
+//     model-plane (inches → meters → lng/lat → screen px) for drawing
+//     the shape outline and positioning handles.
+//   - The bbox AABB that's passed in is the AABB of the rotated shape;
+//     we use it only to derive the scale (m/inch) at the current view.
+//   - Drag interactions:
+//       · Drag inside the shape outline → translate (onCenterChange).
+//       · Drag a corner handle (rectangle) → resize; the opposite corner
+//         is the anchor.
+//       · Drag the perimeter handle (circle / hex) → change diameter.
+//       · Drag the rotation handle → rotate around center.
 
 import maplibregl, { type Map as MlMap } from "maplibre-gl";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
-import {
-  bboxCenter,
-  bboxFromCenter,
-  bboxWidthMeters,
-} from "@/lib/bbox";
+import { bboxCenter, bboxWidthMeters, metersPerDegLng } from "@/lib/bbox";
+import { shapeAABBHalf, shapeIsRotatable, type Shape } from "@/lib/shape";
 import type { Bbox, LngLat } from "@/lib/types";
+
+const METERS_PER_DEG_LAT = 111_320;
+
+/** Pixel margin from shape edge to the rotation handle. */
+const ROTATION_HANDLE_OFFSET_PX = 28;
 
 interface Props {
   bbox: Bbox | null;
-  /** width / height. Locks the bbox aspect to the print aspect. */
-  aspect: number;
-  onBboxChange: (next: Bbox) => void;
-  /** When set, the map fly-tos this center. */
+  shape: Shape;
+  /** Shape's pre-rotation width in inches. */
+  widthInches: number;
+  /** Shape's pre-rotation height in inches. */
+  heightInches: number;
+  /** Degrees clockwise (in screen, where +z is north). */
+  rotation: number;
+  onCenterChange: (next: LngLat) => void;
+  /** Sets new shape pre-rotation dimensions in inches. */
+  onResize: (widthInches: number, heightInches: number) => void;
+  onRotationChange: (rotationDeg: number) => void;
   flyTo?: LngLat | null;
 }
 
-// Basemap: OpenTopoMap raster tiles — free, no API key, CC-BY-SA, and
-// (the bonus) actually a topographic style with contour lines baked in,
-// which is exactly what you want when framing a ski mountain. Three
-// mirrors for redundancy. If a MapTiler key is set we use their outdoor
-// style instead.
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY ?? "";
 
 const MAPTILER_STYLE_URL = MAPTILER_KEY
@@ -67,25 +73,102 @@ const OPENTOPO_STYLE: maplibregl.StyleSpecification = {
   layers: [{ id: "topo", type: "raster", source: "topo" }],
 };
 
+/**
+ * Convert a model-plane offset (inches in shape-local, un-rotated frame)
+ * to a geographic point relative to `center`, applying rotation.
+ *   +x = east (positive longitude)
+ *   +z = north (positive latitude)
+ */
+function localToGeo(
+  center: LngLat,
+  xIn: number,
+  zIn: number,
+  rotationDeg: number,
+  metersPerInch: number,
+): LngLat {
+  const θ = (rotationDeg * Math.PI) / 180;
+  const c = Math.cos(θ);
+  const s = Math.sin(θ);
+  const rx = xIn * c - zIn * s;
+  const rz = xIn * s + zIn * c;
+  const rxM = rx * metersPerInch;
+  const rzM = rz * metersPerInch;
+  const dLng = rxM / metersPerDegLng(center[1]);
+  const dLat = rzM / METERS_PER_DEG_LAT;
+  return [center[0] + dLng, center[1] + dLat];
+}
+
+/** Convert window-relative pointer coords to map-container-relative px. */
+function cursorContainerPx(
+  e: PointerEvent,
+  container: HTMLElement | null,
+): [number, number] {
+  if (!container) return [e.clientX, e.clientY];
+  const rect = container.getBoundingClientRect();
+  return [e.clientX - rect.left, e.clientY - rect.top];
+}
+
+/** Inverse of localToGeo: take a geographic offset and return un-rotated shape-local inches. */
+function geoToLocal(
+  center: LngLat,
+  point: LngLat,
+  rotationDeg: number,
+  metersPerInch: number,
+): [number, number] {
+  const dLng = point[0] - center[0];
+  const dLat = point[1] - center[1];
+  const rxM = dLng * metersPerDegLng(center[1]);
+  const rzM = dLat * METERS_PER_DEG_LAT;
+  const rxIn = rxM / metersPerInch;
+  const rzIn = rzM / metersPerInch;
+  // Un-rotate.
+  const θ = (-rotationDeg * Math.PI) / 180;
+  const c = Math.cos(θ);
+  const s = Math.sin(θ);
+  return [rxIn * c - rzIn * s, rxIn * s + rzIn * c];
+}
+
 export default function MapPicker({
   bbox,
-  aspect,
-  onBboxChange,
+  shape,
+  widthInches,
+  heightInches,
+  rotation,
+  onCenterChange,
+  onResize,
+  onRotationChange,
   flyTo,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
-  const overlayRef = useRef<HTMLDivElement | null>(null);
-  const handleRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  // We keep the latest bbox in a ref so mouse-move handlers always see fresh
-  // state without re-binding listeners every render.
+  // SVG + handle element refs.
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const groupRef = useRef<SVGGElement | null>(null);
+  const shapePathRef = useRef<SVGPathElement | null>(null);
+  const nwHandleRef = useRef<SVGCircleElement | null>(null);
+  const seHandleRef = useRef<SVGCircleElement | null>(null);
+  const perimHandleRef = useRef<SVGCircleElement | null>(null);
+  const rotHandleRef = useRef<SVGCircleElement | null>(null);
+  const rotLineRef = useRef<SVGLineElement | null>(null);
+
+  // Mutable refs so listeners always see fresh values.
   const bboxRef = useRef<Bbox | null>(bbox);
   bboxRef.current = bbox;
-  const aspectRef = useRef(aspect);
-  aspectRef.current = aspect;
-  const onChangeRef = useRef(onBboxChange);
-  onChangeRef.current = onBboxChange;
+  const shapeRef = useRef<Shape>(shape);
+  shapeRef.current = shape;
+  const widthRef = useRef(widthInches);
+  widthRef.current = widthInches;
+  const heightRef = useRef(heightInches);
+  heightRef.current = heightInches;
+  const rotationRef = useRef(rotation);
+  rotationRef.current = rotation;
+  const onCenterRef = useRef(onCenterChange);
+  onCenterRef.current = onCenterChange;
+  const onResizeRef = useRef(onResize);
+  onResizeRef.current = onResize;
+  const onRotationRef = useRef(onRotationChange);
+  onRotationRef.current = onRotationChange;
 
   // --- 1. Initialize the map once ---
   useEffect(() => {
@@ -94,21 +177,15 @@ export default function MapPicker({
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: MAPTILER_STYLE_URL ?? OPENTOPO_STYLE,
-      center: [-72.5, 44.93], // Jay Peak-ish: a friendly default
+      center: [-72.5, 44.93],
       zoom: 11,
-      // In MapLibre v4 the constructor option is a boolean. To get the
-      // compact-attribution look we disable the default and add our own.
       attributionControl: false,
     });
-    // Surface tile / style errors in the console so you can tell when the
-    // basemap host is unreachable.
     map.on("error", (e) => {
       const err = (e as { error?: { message?: string } }).error;
       // eslint-disable-next-line no-console
       console.warn("[map error]", err?.message ?? e);
     });
-    // Force a resize shortly after mount in case the container hadn't
-    // settled to its final size when MapLibre measured it.
     setTimeout(() => map.resize(), 100);
     map.addControl(
       new maplibregl.AttributionControl({ compact: true }),
@@ -134,35 +211,153 @@ export default function MapPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- 2. Repaint overlay whenever bbox or aspect changes ---
+  // Compute the SHAPE's metersPerInch from the current bbox AABB. The
+  // bbox is the AABB of the rotated shape; meters per inch is the AABB
+  // width in meters divided by the AABB width in inches.
+  const metersPerInch = useMemo(() => {
+    if (!bbox) return 0;
+    const halfWIn = shapeAABBHalf(shape, widthInches, heightInches, rotation)[0];
+    if (halfWIn === 0) return 0;
+    return bboxWidthMeters(bbox) / (halfWIn * 2);
+  }, [bbox, shape, widthInches, heightInches, rotation]);
+
+  // --- 2. Paint shape outline + handles in screen pixels ---
   const paintOverlay = useCallback(() => {
     const map = mapRef.current;
-    const overlay = overlayRef.current;
+    const svg = svgRef.current;
+    const group = groupRef.current;
     const b = bboxRef.current;
-    if (!map || !overlay || !b) return;
+    if (!map || !svg || !group || !b) return;
 
-    const nw = map.project([b[0], b[3]]);
-    const se = map.project([b[2], b[1]]);
-    const left = Math.min(nw.x, se.x);
-    const top = Math.min(nw.y, se.y);
-    const width = Math.abs(se.x - nw.x);
-    const height = Math.abs(se.y - nw.y);
+    const sh = shapeRef.current;
+    const w = widthRef.current;
+    const h = heightRef.current;
+    const rot = rotationRef.current;
+    if (w <= 0 || h <= 0) return;
 
-    overlay.style.left = `${left}px`;
-    overlay.style.top = `${top}px`;
-    overlay.style.width = `${width}px`;
-    overlay.style.height = `${height}px`;
+    const center = bboxCenter(b);
+    const halfWIn = shapeAABBHalf(sh, w, h, rot)[0];
+    const mPerIn = bboxWidthMeters(b) / (halfWIn * 2);
 
-    const resizeH = handleRefs.current.resize;
-    if (resizeH) {
-      resizeH.style.left = `${left + width - 7}px`;
-      resizeH.style.top = `${top + height - 7}px`;
+    // Project the shape's center to screen.
+    const cPx = map.project(center);
+
+    // For each shape-local offset, compute the screen pixel position
+    // (this naturally includes rotation, since localToGeo applies it).
+    const projLocal = (xIn: number, zIn: number) => {
+      const geo = localToGeo(center, xIn, zIn, rot, mPerIn);
+      return map.project(geo);
+    };
+
+    // Un-rotated shape outline path in shape-local inches, then projected.
+    let path = "";
+    if (sh === "rectangle") {
+      const corners: Array<[number, number]> = [
+        [-w / 2, -h / 2],
+        [+w / 2, -h / 2],
+        [+w / 2, +h / 2],
+        [-w / 2, +h / 2],
+      ];
+      path = corners
+        .map(([x, z], i) => {
+          const p = projLocal(x, z);
+          return `${i === 0 ? "M" : "L"}${p.x.toFixed(2)},${p.y.toFixed(2)}`;
+        })
+        .join(" ") + " Z";
+    } else if (sh === "circle") {
+      const R = w / 2;
+      const N = 64;
+      const pts: string[] = [];
+      for (let i = 0; i < N; i++) {
+        const a = (i / N) * Math.PI * 2;
+        const p = projLocal(R * Math.cos(a), R * Math.sin(a));
+        pts.push(`${i === 0 ? "M" : "L"}${p.x.toFixed(2)},${p.y.toFixed(2)}`);
+      }
+      path = pts.join(" ") + " Z";
+    } else if (sh === "hexagon") {
+      const R = w / 2;
+      const pts: string[] = [];
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        const p = projLocal(R * Math.cos(a), R * Math.sin(a));
+        pts.push(`${i === 0 ? "M" : "L"}${p.x.toFixed(2)},${p.y.toFixed(2)}`);
+      }
+      path = pts.join(" ") + " Z";
+    }
+    shapePathRef.current?.setAttribute("d", path);
+
+    // Position handles — only the relevant ones; hide the rest.
+    const setHandle = (
+      el: SVGCircleElement | null,
+      visible: boolean,
+      xIn?: number,
+      zIn?: number,
+    ) => {
+      if (!el) return;
+      if (!visible) {
+        el.setAttribute("visibility", "hidden");
+        return;
+      }
+      el.removeAttribute("visibility");
+      const p = projLocal(xIn ?? 0, zIn ?? 0);
+      el.setAttribute("cx", p.x.toFixed(2));
+      el.setAttribute("cy", p.y.toFixed(2));
+    };
+
+    if (sh === "rectangle") {
+      // NW = (west, north) = (-W/2, +H/2). SE = (east, south) = (+W/2, -H/2).
+      setHandle(nwHandleRef.current, true, -w / 2, +h / 2);
+      setHandle(seHandleRef.current, true, +w / 2, -h / 2);
+      setHandle(perimHandleRef.current, false);
+    } else if (sh === "circle") {
+      setHandle(nwHandleRef.current, false);
+      setHandle(seHandleRef.current, false);
+      setHandle(perimHandleRef.current, true, w / 2, 0);
+    } else if (sh === "hexagon") {
+      setHandle(nwHandleRef.current, false);
+      setHandle(seHandleRef.current, false);
+      setHandle(perimHandleRef.current, true, w / 2, 0);
+    }
+
+    // Rotation handle (above the top edge, perpendicular to it). Skip
+    // for circle. "Top" = north (+z) since the map is north-up.
+    if (shapeIsRotatable(sh)) {
+      const topMidLocal: [number, number] =
+        sh === "hexagon" ? [0, ((w / 2) * Math.sqrt(3)) / 2] : [0, +h / 2];
+      const topPx = projLocal(topMidLocal[0], topMidLocal[1]);
+      // The rotation-handle direction: outward from center through the
+      // top midpoint. Project the center too so we have a normalized
+      // outward direction in screen pixels.
+      const dx = topPx.x - cPx.x;
+      const dy = topPx.y - cPx.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len;
+      const uy = dy / len;
+      const handleX = topPx.x + ux * ROTATION_HANDLE_OFFSET_PX;
+      const handleY = topPx.y + uy * ROTATION_HANDLE_OFFSET_PX;
+      const rotH = rotHandleRef.current;
+      const rotL = rotLineRef.current;
+      if (rotH) {
+        rotH.removeAttribute("visibility");
+        rotH.setAttribute("cx", handleX.toFixed(2));
+        rotH.setAttribute("cy", handleY.toFixed(2));
+      }
+      if (rotL) {
+        rotL.removeAttribute("visibility");
+        rotL.setAttribute("x1", topPx.x.toFixed(2));
+        rotL.setAttribute("y1", topPx.y.toFixed(2));
+        rotL.setAttribute("x2", handleX.toFixed(2));
+        rotL.setAttribute("y2", handleY.toFixed(2));
+      }
+    } else {
+      rotHandleRef.current?.setAttribute("visibility", "hidden");
+      rotLineRef.current?.setAttribute("visibility", "hidden");
     }
   }, []);
 
   useEffect(() => {
     paintOverlay();
-  }, [bbox, aspect, paintOverlay]);
+  }, [bbox, shape, widthInches, heightInches, rotation, paintOverlay]);
 
   // --- 3. Fly to new search result ---
   useEffect(() => {
@@ -171,52 +366,47 @@ export default function MapPicker({
     map.flyTo({ center: flyTo, zoom: Math.max(map.getZoom(), 12), duration: 800 });
   }, [flyTo]);
 
-  // --- 4. Drag-to-move (anywhere inside the bbox overlay) ---
+  // --- 4. Drag-to-move: dragging the shape's interior ---
   useEffect(() => {
+    const path = shapePathRef.current;
     const map = mapRef.current;
-    const overlay = overlayRef.current;
-    if (!map || !overlay) return;
+    if (!path || !map) return;
 
     let dragging = false;
-    let startPx = { x: 0, y: 0 };
+    let lastClient = { x: 0, y: 0 };
 
     const onDown = (e: PointerEvent) => {
       const b = bboxRef.current;
       if (!b) return;
       dragging = true;
-      startPx = { x: e.clientX, y: e.clientY };
-      overlay.setPointerCapture(e.pointerId);
+      lastClient = { x: e.clientX, y: e.clientY };
+      path.setPointerCapture(e.pointerId);
       map.dragPan.disable();
+      e.stopPropagation();
     };
     const onMove = (e: PointerEvent) => {
       if (!dragging) return;
       const b = bboxRef.current;
       if (!b) return;
-      const dx = e.clientX - startPx.x;
-      const dy = e.clientY - startPx.y;
+      const dx = e.clientX - lastClient.x;
+      const dy = e.clientY - lastClient.y;
       const center = bboxCenter(b);
-      const centerPx = map.project(center);
-      const newPx = { x: centerPx.x + dx, y: centerPx.y + dy };
-      const newCenter = map.unproject([newPx.x, newPx.y]);
-      startPx = { x: e.clientX, y: e.clientY };
-      const w = bboxWidthMeters(b);
-      onChangeRef.current(
-        bboxFromCenter([newCenter.lng, newCenter.lat], w, aspectRef.current),
-      );
+      const cPx = map.project(center);
+      const newCenter = map.unproject([cPx.x + dx, cPx.y + dy]);
+      lastClient = { x: e.clientX, y: e.clientY };
+      onCenterRef.current([newCenter.lng, newCenter.lat]);
     };
     const onUp = (e: PointerEvent) => {
       dragging = false;
       try {
-        overlay.releasePointerCapture(e.pointerId);
+        path.releasePointerCapture(e.pointerId);
       } catch {
         /* ignore */
       }
       map.dragPan.enable();
     };
 
-    // The overlay sits above the MapLibre canvas with pointer-events: auto,
-    // which would otherwise swallow scroll-zoom. Re-dispatch wheel events to
-    // the canvas so the user can zoom while their cursor is inside the bbox.
+    // Forward wheel inside the shape to the map canvas so scroll-zoom works.
     const canvas = map.getCanvas();
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -238,106 +428,277 @@ export default function MapPicker({
       );
     };
 
-    overlay.addEventListener("pointerdown", onDown);
-    overlay.addEventListener("pointermove", onMove);
-    overlay.addEventListener("pointerup", onUp);
-    overlay.addEventListener("pointercancel", onUp);
-    overlay.addEventListener("wheel", onWheel, { passive: false });
+    path.addEventListener("pointerdown", onDown);
+    path.addEventListener("pointermove", onMove);
+    path.addEventListener("pointerup", onUp);
+    path.addEventListener("pointercancel", onUp);
+    path.addEventListener("wheel", onWheel, { passive: false });
     return () => {
-      overlay.removeEventListener("pointerdown", onDown);
-      overlay.removeEventListener("pointermove", onMove);
-      overlay.removeEventListener("pointerup", onUp);
-      overlay.removeEventListener("pointercancel", onUp);
-      overlay.removeEventListener("wheel", onWheel);
+      path.removeEventListener("pointerdown", onDown);
+      path.removeEventListener("pointermove", onMove);
+      path.removeEventListener("pointerup", onUp);
+      path.removeEventListener("pointercancel", onUp);
+      path.removeEventListener("wheel", onWheel);
     };
   }, []);
 
-  // --- 5. Drag-to-resize (SE corner) ---
+  // --- 5. Corner-handle resize (rectangle) ---
+  // The OPPOSITE corner stays anchored in geographic space. We:
+  //   1. Read the anchor's current geographic position.
+  //   2. Read the cursor's geographic position (the new dragged corner).
+  //   3. Compute the new center = midpoint of those two.
+  //   4. Un-rotate the diagonal vector (cursor − anchor) into the
+  //      shape's local frame; that gives (±W_new, ±H_new) directly.
   useEffect(() => {
+    const wireCorner = (
+      el: SVGCircleElement | null,
+      isNW: boolean, // true = dragging NW, anchored on SE
+    ) => {
+      const map = mapRef.current;
+      if (!el || !map) return;
+      let dragging = false;
+      const onDown = (e: PointerEvent) => {
+        dragging = true;
+        el.setPointerCapture(e.pointerId);
+        map.dragPan.disable();
+        e.stopPropagation();
+      };
+      const onMove = (e: PointerEvent) => {
+        if (!dragging) return;
+        const b = bboxRef.current;
+        if (!b) return;
+        const w = widthRef.current;
+        const h = heightRef.current;
+        const rot = rotationRef.current;
+        const center = bboxCenter(b);
+        const halfWIn = shapeAABBHalf(shapeRef.current, w, h, rot)[0];
+        const mPerIn = bboxWidthMeters(b) / (halfWIn * 2);
+
+        // Anchored corner in shape-local coords:
+        //   NW drag → anchor is SE = (+W/2, -H/2)
+        //   SE drag → anchor is NW = (-W/2, +H/2)
+        const anchorLocal: [number, number] = isNW
+          ? [+w / 2, -h / 2]
+          : [-w / 2, +h / 2];
+        const anchorGeo = localToGeo(center, anchorLocal[0], anchorLocal[1], rot, mPerIn);
+
+        const [cx, cy] = cursorContainerPx(e, containerRef.current);
+        const dragged = map.unproject([cx, cy]);
+        const draggedGeo: LngLat = [dragged.lng, dragged.lat];
+
+        // Diagonal vector dragged − anchor, un-rotated to local inches.
+        // For NW drag: local diag = NW − SE = (-W, +H).
+        // For SE drag: local diag = SE − NW = (+W, -H).
+        const localDiag = geoToLocal(anchorGeo, draggedGeo, rot, mPerIn);
+        const sign = isNW ? -1 : 1;
+        const newW = Math.max(2, sign * localDiag[0]);
+        const newH = Math.max(2, -sign * localDiag[1]);
+
+        const midLng = (draggedGeo[0] + anchorGeo[0]) / 2;
+        const midLat = (draggedGeo[1] + anchorGeo[1]) / 2;
+        onResizeRef.current(newW, newH);
+        onCenterRef.current([midLng, midLat]);
+      };
+      const onUp = (e: PointerEvent) => {
+        dragging = false;
+        try {
+          el.releasePointerCapture(e.pointerId);
+        } catch {
+          /* ignore */
+        }
+        map.dragPan.enable();
+      };
+      el.addEventListener("pointerdown", onDown);
+      el.addEventListener("pointermove", onMove);
+      el.addEventListener("pointerup", onUp);
+      el.addEventListener("pointercancel", onUp);
+      return () => {
+        el.removeEventListener("pointerdown", onDown);
+        el.removeEventListener("pointermove", onMove);
+        el.removeEventListener("pointerup", onUp);
+        el.removeEventListener("pointercancel", onUp);
+      };
+    };
+
+    const cleanupNW = wireCorner(nwHandleRef.current, true);
+    const cleanupSE = wireCorner(seHandleRef.current, false);
+    return () => {
+      cleanupNW?.();
+      cleanupSE?.();
+    };
+  }, []);
+
+  // --- 6. Perimeter-handle resize (circle / hexagon) ---
+  // The handle sits at the east point of the un-rotated shape. Dragging
+  // changes the radius / half-width; we keep the shape centered.
+  useEffect(() => {
+    const el = perimHandleRef.current;
     const map = mapRef.current;
-    const handle = handleRefs.current.resize;
-    if (!map || !handle) return;
-
+    if (!el || !map) return;
     let dragging = false;
-
     const onDown = (e: PointerEvent) => {
       dragging = true;
-      handle.setPointerCapture(e.pointerId);
+      el.setPointerCapture(e.pointerId);
       map.dragPan.disable();
+      e.stopPropagation();
+    };
+    const onMove = (e: PointerEvent) => {
+      if (!dragging) return;
+      const b = bboxRef.current;
+      if (!b) return;
+      const w = widthRef.current;
+      const h = heightRef.current;
+      const rot = rotationRef.current;
+      const sh = shapeRef.current;
+      const center = bboxCenter(b);
+      const halfWIn = shapeAABBHalf(sh, w, h, rot)[0];
+      const mPerIn = bboxWidthMeters(b) / (halfWIn * 2);
+      const [cx, cy] = cursorContainerPx(e, containerRef.current);
+      const drag = map.unproject([cx, cy]);
+      const local = geoToLocal(center, [drag.lng, drag.lat], rot, mPerIn);
+      // Half-diameter is |local.x| (the handle sits at +x of the un-
+      // rotated shape — by convention we treat the magnitude as the
+      // radius so dragging through center doesn't flip the sign).
+      const newHalfWIn = Math.max(1, Math.abs(local[0]));
+      const newDiameter = newHalfWIn * 2;
+      if (sh === "circle") {
+        onResizeRef.current(newDiameter, newDiameter);
+      } else if (sh === "hexagon") {
+        onResizeRef.current(newDiameter, (newDiameter * Math.sqrt(3)) / 2);
+      }
+    };
+    const onUp = (e: PointerEvent) => {
+      dragging = false;
+      try {
+        el.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      map.dragPan.enable();
+    };
+    el.addEventListener("pointerdown", onDown);
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+    return () => {
+      el.removeEventListener("pointerdown", onDown);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+    };
+  }, []);
+
+  // --- 7. Rotation handle ---
+  // Compute the angle from the shape's center to the cursor; that's the
+  // new rotation. We measure with respect to the canonical "top
+  // midpoint" direction (which is (0, -1) in shape local — straight up
+  // in screen pixels at rotation 0).
+  useEffect(() => {
+    const el = rotHandleRef.current;
+    const map = mapRef.current;
+    if (!el || !map) return;
+    let dragging = false;
+    const onDown = (e: PointerEvent) => {
+      dragging = true;
+      el.setPointerCapture(e.pointerId);
+      map.dragPan.disable();
+      e.stopPropagation();
     };
     const onMove = (e: PointerEvent) => {
       if (!dragging) return;
       const b = bboxRef.current;
       if (!b) return;
       const center = bboxCenter(b);
-      const centerPx = map.project(center);
-      const dxPx = e.clientX - centerPx.x;
-      // Convert horizontal half-width in px to meters: project a point
-      // dxPx to the right of center and measure ground distance.
-      const rightLngLat = map.unproject([centerPx.x + Math.abs(dxPx), centerPx.y]);
-      const halfWidthMeters = haversine(center, [rightLngLat.lng, rightLngLat.lat]);
-      const widthMeters = Math.max(200, halfWidthMeters * 2);
-      onChangeRef.current(
-        bboxFromCenter(center, widthMeters, aspectRef.current),
-      );
+      const cPx = map.project(center);
+      const [cx, cy] = cursorContainerPx(e, containerRef.current);
+      const dx = cx - cPx.x;
+      const dy = cy - cPx.y;
+      // The handle at rotation = 0 sits ABOVE the shape on a north-up
+      // map. Our rotation is positive-CCW in the (x, +z=north) math
+      // frame, which is CCW when viewed from above. A CW drag on screen
+      // (which the user perceives as a clockwise twist) should therefore
+      // decrease rotation. atan2(-dx, -dy) returns the math-CCW angle
+      // from "up": for cursor at (dx, dy) = (-1, 0) (west) → +π/2.
+      const angleRad = Math.atan2(-dx, -dy);
+      const angleDeg = (angleRad * 180) / Math.PI;
+      onRotationRef.current(angleDeg);
     };
     const onUp = (e: PointerEvent) => {
       dragging = false;
       try {
-        handle.releasePointerCapture(e.pointerId);
+        el.releasePointerCapture(e.pointerId);
       } catch {
         /* ignore */
       }
       map.dragPan.enable();
     };
-
-    handle.addEventListener("pointerdown", onDown);
-    handle.addEventListener("pointermove", onMove);
-    handle.addEventListener("pointerup", onUp);
-    handle.addEventListener("pointercancel", onUp);
+    el.addEventListener("pointerdown", onDown);
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
     return () => {
-      handle.removeEventListener("pointerdown", onDown);
-      handle.removeEventListener("pointermove", onMove);
-      handle.removeEventListener("pointerup", onUp);
-      handle.removeEventListener("pointercancel", onUp);
+      el.removeEventListener("pointerdown", onDown);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
     };
   }, []);
+
+  // Suppress unused-warning for metersPerInch: kept around for potential
+  // future use, e.g. live-readout of model scale.
+  void metersPerInch;
 
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="absolute inset-0" />
-      <div
-        ref={overlayRef}
-        className="bbox-overlay"
-        aria-label="Move bounding box"
-        role="button"
-        tabIndex={0}
-      />
-      <div
-        ref={(el) => {
-          handleRefs.current.resize = el;
-        }}
-        className="bbox-handle"
-        aria-label="Resize bounding box"
-        role="button"
-        tabIndex={0}
-      />
+      {/* SVG overlay covers the whole map; child elements are positioned
+          in absolute screen pixels. The SVG itself doesn't capture
+          pointer events; only its interactive children do. */}
+      <svg
+        ref={svgRef}
+        className="shape-overlay-svg"
+        width="100%"
+        height="100%"
+      >
+        <g ref={groupRef}>
+          <path
+            ref={shapePathRef}
+            className="shape-fill"
+            aria-label="Move shape"
+            role="button"
+            tabIndex={0}
+          />
+          <line ref={rotLineRef} className="rotation-line" />
+          <circle
+            ref={nwHandleRef}
+            className="resize-handle"
+            r={7}
+            aria-label="Resize from NW"
+            role="button"
+          />
+          <circle
+            ref={seHandleRef}
+            className="resize-handle"
+            r={7}
+            aria-label="Resize from SE"
+            role="button"
+          />
+          <circle
+            ref={perimHandleRef}
+            className="resize-handle"
+            r={7}
+            aria-label="Resize diameter"
+            role="button"
+          />
+          <circle
+            ref={rotHandleRef}
+            className="rotation-handle"
+            r={7}
+            aria-label="Rotate shape"
+            role="button"
+          />
+        </g>
+      </svg>
     </div>
   );
-}
-
-// Great-circle distance in meters. We use this once per resize tick — fine
-// for an interactive UI, but if you ever need it in a hot loop, switch to
-// the small-angle approximation in lib/bbox.ts.
-function haversine(a: LngLat, b: LngLat): number {
-  const R = 6_371_000;
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const dLat = toRad(b[1] - a[1]);
-  const dLng = toRad(b[0] - a[0]);
-  const lat1 = toRad(a[1]);
-  const lat2 = toRad(b[1]);
-  const h =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(h));
 }

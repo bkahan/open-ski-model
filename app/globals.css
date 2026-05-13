@@ -14,29 +14,47 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Bbox overlay drawn on top of the MapLibre canvas */
-.bbox-overlay {
+/* SVG overlay containing the shape outline + handles. The <svg> itself
+   doesn't capture pointer events — only its interactive children do —
+   so map panning continues to work everywhere else. */
+.shape-overlay-svg {
   position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.shape-fill {
+  fill: rgba(245, 185, 66, 0.12);
+  stroke: #f5b942;
+  stroke-width: 2;
   pointer-events: auto;
-  border: 2px solid #f5b942;
-  background: rgba(245, 185, 66, 0.08);
-  box-shadow: 0 0 0 9999px rgba(11, 18, 32, 0.35);
-  border-radius: 2px;
   cursor: grab;
   touch-action: none;
 }
+.shape-fill:active { cursor: grabbing; }
 
-.bbox-overlay:active {
-  cursor: grabbing;
-}
-
-.bbox-handle {
-  position: absolute;
-  width: 14px;
-  height: 14px;
-  background: #f5b942;
-  border: 2px solid #0b1220;
-  border-radius: 50%;
+.resize-handle {
+  fill: #f5b942;
+  stroke: #0b1220;
+  stroke-width: 2;
   pointer-events: auto;
   cursor: nwse-resize;
+}
+
+.rotation-handle {
+  fill: #38bdf8;
+  stroke: #0b1220;
+  stroke-width: 2;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+}
+.rotation-handle:active { cursor: grabbing; }
+
+.rotation-line {
+  stroke: #38bdf8;
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+  pointer-events: none;
 }

@@ -22,11 +22,14 @@ import { VertexData } from "@babylonjs/core";
 import type { Bbox } from "@/lib/types";
 import { bboxWidthMeters } from "@/lib/bbox";
 import type { ElevationResponse } from "@/lib/elevation/types";
+import { pointInShape, shapeAABBHalf, type Shape } from "@/lib/shape";
 
 export interface WatertightSpec {
   bbox: Bbox;
   data: ElevationResponse;
+  /** Shape pre-rotation width in inches. */
   widthInches: number;
+  /** Shape pre-rotation height in inches. */
   heightInches: number;
   baseThicknessInches: number;
   verticalExaggeration: number;
@@ -213,6 +216,218 @@ export function buildWatertight(
   // convention — it negates the per-face sign and our outward normals
   // come out correct. Without this flag, the STL exports inside-out and
   // lighting looks inverted (sun-lit faces appear dark).
+  VertexData.ComputeNormals(positionsArr, indicesArr, normals, {
+    useRightHandedSystem: true,
+  });
+
+  const vd = new VertexData();
+  vd.positions = positionsArr;
+  vd.indices = indicesArr;
+  vd.normals = normals;
+  vd.colors = colorsArr;
+
+  return {
+    vertexData: vd,
+    inPerMeter,
+    topYFn: (k) => topY[k],
+  };
+}
+
+/**
+ * Shape-aware watertight build. Used for non-rectangular shapes (circle,
+ * hexagon). The shape is inscribed in the bbox / print canvas; cells
+ * whose 4 corners all fall inside the shape are kept, others are skipped,
+ * and side walls follow the staircase boundary of the kept region.
+ *
+ * Mental model:
+ *   - The cap (top surface) is the kept-cell quads stitched together,
+ *     just like the rectangle path but with rejected cells punched out.
+ *   - The bottom is a flat copy of the cap footprint at y = 0, with
+ *     reversed winding so the normal points down.
+ *   - The walls are emitted per cell: for every kept cell, each side that
+ *     borders a rejected cell (or the grid edge) gets a vertical strip.
+ *     Walking each cell's perimeter CCW (viewed from above) is what makes
+ *     the wall outward-normals come out correct without per-side flip
+ *     bookkeeping.
+ *
+ * The boundary is staircase-quantized to grid cells. At 256×256 that's
+ * ~0.4% of the model width per step — visually invisible at typical
+ * print sizes, but the model is honestly a hex / circle now, not a
+ * rectangle styled to look like one.
+ */
+export function buildShapedWatertight(
+  spec: WatertightSpec,
+  shape: Shape,
+  rotation: number,
+  palette: Palette = DEFAULT_PALETTE,
+): { vertexData: VertexData; inPerMeter: number; topYFn: (k: number) => number } {
+  const {
+    bbox,
+    data,
+    widthInches: shapeWIn,
+    heightInches: shapeHIn,
+    baseThicknessInches: base,
+    verticalExaggeration: vx,
+  } = spec;
+  const { heights, width: gw, height: gh, min, max } = data;
+
+  // The grid spans the AABB of the rotated shape. The shape itself
+  // (pre-rotation widthInches × heightInches, rotated by `rotation`) is
+  // inscribed in the AABB.
+  const [aabbHalfW, aabbHalfH] = shapeAABBHalf(
+    shape,
+    shapeWIn,
+    shapeHIn,
+    rotation,
+  );
+  const W = aabbHalfW * 2;
+  const H = aabbHalfH * 2;
+
+  const bboxWMeters = bboxWidthMeters(bbox);
+  const inPerMeter = W / bboxWMeters;
+
+  const topY = new Float32Array(gw * gh);
+  for (let k = 0; k < gw * gh; k++) {
+    topY[k] = base + (heights[k] - min) * inPerMeter * vx;
+  }
+
+  const xAt = (i: number) => -W / 2 + (i * W) / (gw - 1);
+  const zAt = (j: number) => H / 2 - (j * H) / (gh - 1);
+
+  // Vertex-inside mask, then cell-kept mask (cell kept iff all 4 corners in).
+  const vIn = new Uint8Array(gw * gh);
+  for (let j = 0; j < gh; j++) {
+    for (let i = 0; i < gw; i++) {
+      vIn[j * gw + i] = pointInShape(
+        shape,
+        xAt(i),
+        zAt(j),
+        shapeWIn,
+        shapeHIn,
+        rotation,
+      )
+        ? 1
+        : 0;
+    }
+  }
+  const cw = gw - 1;
+  const ch = gh - 1;
+  const cellKept = new Uint8Array(cw * ch);
+  for (let j = 0; j < ch; j++) {
+    for (let i = 0; i < cw; i++) {
+      cellKept[j * cw + i] =
+        vIn[j * gw + i] &
+        vIn[j * gw + i + 1] &
+        vIn[(j + 1) * gw + i] &
+        vIn[(j + 1) * gw + i + 1];
+    }
+  }
+
+  const positions: number[] = [];
+  const colors: number[] = [];
+  const indices: number[] = [];
+  const pushColor = (c: [number, number, number]) => {
+    colors.push(c[0], c[1], c[2], 1);
+  };
+
+  // ---------- 1. TOP SURFACE ----------
+  // Emit all grid vertices for trivial indexing. Rejected vertices stay in
+  // the buffer but no index references them — wasted memory, not wrong.
+  const topOff = positions.length / 3;
+  for (let j = 0; j < gh; j++) {
+    for (let i = 0; i < gw; i++) {
+      const k = j * gw + i;
+      positions.push(xAt(i), topY[k], zAt(j));
+      const t = max > min ? (heights[k] - min) / (max - min) : 0;
+      pushColor(palette.surface(t));
+    }
+  }
+  for (let j = 0; j < ch; j++) {
+    for (let i = 0; i < cw; i++) {
+      if (!cellKept[j * cw + i]) continue;
+      const a = topOff + j * gw + i;
+      const b = topOff + j * gw + i + 1;
+      const c = topOff + (j + 1) * gw + i;
+      const d = topOff + (j + 1) * gw + i + 1;
+      indices.push(a, b, c, b, d, c);
+    }
+  }
+
+  // ---------- 2. BOTTOM SURFACE ----------
+  // Flat copy at y = 0, opposite winding (CW from above = -Y normal).
+  const botOff = positions.length / 3;
+  for (let j = 0; j < gh; j++) {
+    for (let i = 0; i < gw; i++) {
+      positions.push(xAt(i), 0, zAt(j));
+      pushColor(palette.base);
+    }
+  }
+  for (let j = 0; j < ch; j++) {
+    for (let i = 0; i < cw; i++) {
+      if (!cellKept[j * cw + i]) continue;
+      const a = botOff + j * gw + i;
+      const b = botOff + j * gw + i + 1;
+      const c = botOff + (j + 1) * gw + i;
+      const d = botOff + (j + 1) * gw + i + 1;
+      indices.push(a, c, b, b, c, d);
+    }
+  }
+
+  // ---------- 3. SIDE WALLS ----------
+  // For each kept cell, emit a vertical strip on each side whose neighbor
+  // is rejected. Walking the cell's perimeter CCW (from above) gives the
+  // outward normal automatically — verified per side in derivation below.
+  //
+  // For (kA, kB) walked along the top edge, the wall quad is:
+  //   tA = (xA, topY[kA], zA), tB = (xB, topY[kB], zB)
+  //   bA = (xA, 0,         zA), bB = (xB, 0,         zB)
+  // Triangulate (tA, tB, bA), (tB, bB, bA). Outward normal of tri1:
+  //   cross(tB - tA, bA - tA) = (dz·h, 0, -dx·h)
+  // — which yields +Z when walking westward, -Z eastward, +X southward,
+  // -X northward; matches the CCW perimeter walk.
+  const emitWall = (kA: number, kB: number) => {
+    const iA = kA % gw;
+    const jA = (kA - iA) / gw;
+    const iB = kB % gw;
+    const jB = (kB - iB) / gw;
+    const v0 = positions.length / 3;
+    positions.push(xAt(iA), topY[kA], zAt(jA)); pushColor(palette.base);
+    positions.push(xAt(iB), topY[kB], zAt(jB)); pushColor(palette.base);
+    positions.push(xAt(iA), 0,        zAt(jA)); pushColor(palette.base);
+    positions.push(xAt(iB), 0,        zAt(jB)); pushColor(palette.base);
+    indices.push(v0, v0 + 1, v0 + 2, v0 + 1, v0 + 3, v0 + 2);
+  };
+
+  const cellKeptAt = (i: number, j: number) =>
+    i >= 0 && i < cw && j >= 0 && j < ch && cellKept[j * cw + i] === 1;
+
+  for (let j = 0; j < ch; j++) {
+    for (let i = 0; i < cw; i++) {
+      if (!cellKept[j * cw + i]) continue;
+      // EAST side (outward +X): walk south→north on x = xAt(i+1).
+      if (!cellKeptAt(i + 1, j)) {
+        emitWall((j + 1) * gw + (i + 1), j * gw + (i + 1));
+      }
+      // NORTH side (outward +Z): walk east→west on z = zAt(j).
+      if (!cellKeptAt(i, j - 1)) {
+        emitWall(j * gw + (i + 1), j * gw + i);
+      }
+      // WEST side (outward -X): walk north→south on x = xAt(i).
+      if (!cellKeptAt(i - 1, j)) {
+        emitWall(j * gw + i, (j + 1) * gw + i);
+      }
+      // SOUTH side (outward -Z): walk west→east on z = zAt(j+1).
+      if (!cellKeptAt(i, j + 1)) {
+        emitWall((j + 1) * gw + i, (j + 1) * gw + (i + 1));
+      }
+    }
+  }
+
+  // ---------- Pack into typed arrays ----------
+  const positionsArr = new Float32Array(positions);
+  const colorsArr = new Float32Array(colors);
+  const indicesArr = new Uint32Array(indices);
+  const normals = new Float32Array(positionsArr.length);
   VertexData.ComputeNormals(positionsArr, indicesArr, normals, {
     useRightHandedSystem: true,
   });

@@ -1,5 +1,7 @@
 // Shared type definitions for Open Ski Model.
 
+import type { Shape } from "@/lib/shape";
+
 /** [west, south, east, north] in WGS84 degrees. */
 export type Bbox = [number, number, number, number];
 
@@ -13,6 +15,8 @@ export type LngLat = [number, number];
 export interface ModelSpec {
   /** Geographic bounding box [W, S, E, N]. */
   bbox: Bbox;
+  /** Shape inscribed in the bbox — controls the model footprint. */
+  shape: Shape;
   /** Physical print width in inches. */
   widthInches: number;
   /** Physical print height in inches. */

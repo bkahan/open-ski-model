@@ -25,16 +25,21 @@ import {
 import { STLExport } from "@babylonjs/serializers/stl";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { buildWatertight } from "@/lib/mesh/watertight";
+import { buildWatertight, buildShapedWatertight } from "@/lib/mesh/watertight";
 import { buildContourLines } from "@/lib/mesh/contours";
 import type { ElevationResponse } from "@/lib/elevation/types";
+import { pointInShape, shapeAABBHalf, type Shape } from "@/lib/shape";
 import type { Bbox } from "@/lib/types";
 
 interface Props {
   bbox: Bbox;
-  data: ElevationResponse;
+  shape: Shape;
+  /** Shape's pre-rotation dimensions in inches. */
   widthInches: number;
   heightInches: number;
+  /** Degrees clockwise from north. */
+  rotation: number;
+  data: ElevationResponse;
   baseThicknessInches: number;
   verticalExaggeration: number;
   label?: string;
@@ -45,9 +50,11 @@ const CONTOUR_COUNT = 14;
 
 export default function ModelViewer({
   bbox,
+  shape,
   data,
   widthInches,
   heightInches,
+  rotation,
   baseThicknessInches,
   verticalExaggeration,
   label,
@@ -150,14 +157,21 @@ export default function ModelViewer({
     const terrain = terrainRef.current;
     if (!scene || !terrain) return;
 
-    const { vertexData, inPerMeter } = buildWatertight({
+    const meshSpec = {
       bbox,
       data,
       widthInches,
       heightInches,
       baseThicknessInches,
       verticalExaggeration,
-    });
+    };
+    // Use the shape-aware path for anything that needs masking: a
+    // non-rectangle shape, OR a rotated rectangle (since the grid then
+    // spans the AABB, not the rectangle itself).
+    const needsMask = shape !== "rectangle" || rotation !== 0;
+    const { vertexData, inPerMeter } = needsMask
+      ? buildShapedWatertight(meshSpec, shape, rotation)
+      : buildWatertight(meshSpec);
     vertexData.applyToMesh(terrain, true);
     // applyToMesh swaps vertex buffers; the edges renderer caches edge
     // topology, so refresh it now that the geometry has changed.
@@ -166,17 +180,39 @@ export default function ModelViewer({
     terrain.edgesWidth = 1.5;
     terrain.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
 
-    // Rebuild contour lines (replace any previous mesh).
+    // Rebuild contour lines (replace any previous mesh). For non-rect
+    // shapes, mask off cells outside the shape so the lines stop at the
+    // same staircase boundary the mesh uses.
     contoursRef.current?.dispose();
+    // When `needsMask`, the contour grid must use the same AABB extent
+    // as the mesh; otherwise the marching-squares cells won't line up
+    // with the masked geometry.
+    const gw = data.width;
+    const gh = data.height;
+    const aabbHalf = needsMask
+      ? shapeAABBHalf(shape, widthInches, heightInches, rotation)
+      : [widthInches / 2, heightInches / 2];
+    const Wgrid = aabbHalf[0] * 2;
+    const Hgrid = aabbHalf[1] * 2;
+    const xAt = (i: number) => -Wgrid / 2 + (i * Wgrid) / (gw - 1);
+    const zAt = (j: number) => Hgrid / 2 - (j * Hgrid) / (gh - 1);
+    const cellKept = needsMask
+      ? (i: number, j: number) =>
+          pointInShape(shape, xAt(i), zAt(j), widthInches, heightInches, rotation) &&
+          pointInShape(shape, xAt(i + 1), zAt(j), widthInches, heightInches, rotation) &&
+          pointInShape(shape, xAt(i), zAt(j + 1), widthInches, heightInches, rotation) &&
+          pointInShape(shape, xAt(i + 1), zAt(j + 1), widthInches, heightInches, rotation)
+      : undefined;
     const contourData = buildContourLines({
       data,
-      widthInches,
-      heightInches,
+      widthInches: Wgrid,
+      heightInches: Hgrid,
       baseThicknessInches,
       inPerMeter,
       verticalExaggeration,
       count: CONTOUR_COUNT,
       lift: 0.005, // ~5 thousandths of an inch above the surface
+      cellKept,
     });
 
     if (contourData.indices.length > 0) {
@@ -203,7 +239,7 @@ export default function ModelViewer({
     // showContours is intentionally not a dep — toggling it is handled by
     // the next effect, which avoids rebuilding the geometry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bbox, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration]);
+  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration]);
 
   // --- 3. Toggle contour visibility without rebuilding ---
   useEffect(() => {

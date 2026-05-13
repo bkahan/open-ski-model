@@ -32,6 +32,18 @@ export function bboxFromCenter(
   return [lng - dLng, lat - dLat, lng + dLng, lat + dLat];
 }
 
+/** Build a bbox from a center and explicit width/height in meters. */
+export function bboxFromCenterWH(
+  center: LngLat,
+  widthMeters: number,
+  heightMeters: number,
+): Bbox {
+  const [lng, lat] = center;
+  const dLat = heightMeters / 2 / METERS_PER_DEG_LAT;
+  const dLng = widthMeters / 2 / metersPerDegLng(lat);
+  return [lng - dLng, lat - dLat, lng + dLng, lat + dLat];
+}
+
 export function bboxCenter(b: Bbox): LngLat {
   return [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
 }

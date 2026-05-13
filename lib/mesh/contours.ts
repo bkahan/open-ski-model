@@ -24,6 +24,12 @@ export interface ContourSpec {
   /** Small Y-offset to lift the lines just above the surface so they
    *  don't z-fight with the terrain. In inches. */
   lift: number;
+  /**
+   * Optional per-cell mask. If set, the contour pass skips cells where
+   * `cellKept(i, j)` returns false — matches the staircase boundary used
+   * by `buildShapedWatertight` so contour lines don't escape the shape.
+   */
+  cellKept?: (i: number, j: number) => boolean;
 }
 
 /**
@@ -44,6 +50,7 @@ export function buildContourLines(spec: ContourSpec): {
     verticalExaggeration: vx,
     count,
     lift,
+    cellKept,
   } = spec;
   const { heights, width: gw, height: gh, min, max } = data;
 
@@ -64,6 +71,7 @@ export function buildContourLines(spec: ContourSpec): {
       const z0 = zAt(j);
       const z1 = zAt(j + 1);
       for (let i = 0; i < gw - 1; i++) {
+        if (cellKept && !cellKept(i, j)) continue;
         const h00 = heights[j * gw + i];
         const h10 = heights[j * gw + i + 1];
         const h11 = heights[(j + 1) * gw + i + 1];
