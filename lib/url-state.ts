@@ -19,6 +19,8 @@ export interface UrlState {
   verticalExaggeration: number;
   aspectLocked: boolean;
   gridSize: number;
+  engraveLabel: boolean;
+  engraveBrand: boolean;
   label?: string;
 }
 
@@ -32,6 +34,9 @@ export function encodeUrlState(s: UrlState): URLSearchParams {
   if (s.rotation !== 0) params.set("r", trim(s.rotation));
   if (s.aspectLocked) params.set("lk", "1");
   if (s.gridSize !== 256) params.set("g", String(Math.round(s.gridSize)));
+  if (s.engraveLabel) params.set("el", "1");
+  // Default-on toggle: persist "0" only when disabled.
+  if (!s.engraveBrand) params.set("eb", "0");
   params.set("t", trim(s.baseThicknessInches));
   params.set("v", trim(s.verticalExaggeration));
   if (s.label) params.set("label", s.label);
@@ -65,6 +70,10 @@ export function decodeUrlState(params: URLSearchParams): Partial<UrlState> {
   if (params.get("lk") === "1") out.aspectLocked = true;
   const g = params.get("g");
   if (g && Number.isFinite(Number(g))) out.gridSize = Math.round(Number(g));
+  const el = params.get("el");
+  if (el === "1") out.engraveLabel = true;
+  const eb = params.get("eb");
+  if (eb === "0") out.engraveBrand = false;
   const t = params.get("t");
   if (t && Number.isFinite(Number(t))) out.baseThicknessInches = Number(t);
   const v = params.get("v");

@@ -21,6 +21,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import DensityControls from "@/components/DensityControls";
+import EngravingControls from "@/components/EngravingControls";
 import SearchBar from "@/components/SearchBar";
 import ShapeControls from "@/components/ShapeControls";
 import SizeControls, { type SizeState } from "@/components/SizeControls";
@@ -123,6 +124,8 @@ export default function Home() {
   const [shape, setShape] = useState<Shape>("rectangle");
   const [rotation, setRotation] = useState(0);
   const [gridSize, setGridSize] = useState<number>(DEFAULT_GRID_SIZE);
+  const [engraveLabel, setEngraveLabel] = useState<boolean>(false);
+  const [engraveBrand, setEngraveBrand] = useState<boolean>(true);
   const [bbox, setBbox] = useState<Bbox | null>(null);
   const [flyTo, setFlyTo] = useState<LngLat | null>(null);
   const [label, setLabel] = useState<string | undefined>("Jay Peak");
@@ -163,6 +166,8 @@ export default function Home() {
         Math.max(MIN_GRID_SIZE, Math.min(MAX_GRID_SIZE, parsed.gridSize)),
       );
     }
+    if (parsed.engraveLabel !== undefined) setEngraveLabel(parsed.engraveLabel);
+    if (parsed.engraveBrand !== undefined) setEngraveBrand(parsed.engraveBrand);
     if (parsed.label) setLabel(parsed.label);
     if (parsed.bbox) {
       setBbox(parsed.bbox);
@@ -188,11 +193,13 @@ export default function Home() {
         verticalExaggeration: size.verticalExaggeration,
         aspectLocked: size.aspectLocked,
         gridSize,
+        engraveLabel,
+        engraveBrand,
         label,
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [bbox, shape, rotation, size, gridSize, label]);
+  }, [bbox, shape, rotation, size, gridSize, engraveLabel, engraveBrand, label]);
 
   // All bbox refits are done inside the explicit handlers (handleShapeChange,
   // handleSizeChange, etc.) since they already know the old state. We
@@ -428,6 +435,15 @@ export default function Home() {
 
         <DensityControls gridSize={gridSize} onChange={setGridSize} />
 
+        <EngravingControls
+          label={engraveLabel}
+          brand={engraveBrand}
+          onChange={({ label: l, brand: b }) => {
+            setEngraveLabel(l);
+            setEngraveBrand(b);
+          }}
+        />
+
         {view === "viewer" && snapshot && (
           <div className="text-xs text-slate-400 bg-slate-900/60 border border-slate-800 rounded-md p-3 space-y-1 font-mono">
             <div>elev min: <span className="text-slate-100">{Math.round(snapshot.data.min)} m</span></div>
@@ -516,6 +532,8 @@ export default function Home() {
             heightInches={snapshot.heightInches}
             baseThicknessInches={size.baseThicknessInches}
             verticalExaggeration={size.verticalExaggeration}
+            engraveLabel={engraveLabel}
+            engraveBrand={engraveBrand}
             label={snapshot.label}
           />
         )}

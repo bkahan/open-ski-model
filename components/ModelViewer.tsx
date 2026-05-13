@@ -13,22 +13,32 @@ import {
   ArcRotateCamera,
   Color3,
   Color4,
+  CSG,
   DirectionalLight,
   Engine,
   HemisphericLight,
   Mesh,
   MeshBuilder,
+  Quaternion,
   Scene,
   StandardMaterial,
   Vector3,
 } from "@babylonjs/core";
 import { STLExport } from "@babylonjs/serializers/stl";
+import type * as opentype from "opentype.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { buildWatertight, buildShapedWatertight } from "@/lib/mesh/watertight";
 import { buildContourLines } from "@/lib/mesh/contours";
+import { buildPlinth } from "@/lib/mesh/plinth";
+import { buildTextMesh, loadFont, measureTextWidth } from "@/lib/mesh/text";
+import { buildCompassArrow } from "@/lib/mesh/compass";
 import type { ElevationResponse } from "@/lib/elevation/types";
-import { pointInShape, shapeAABBHalf, type Shape } from "@/lib/shape";
+import {
+  pointInShape,
+  shapeAABBHalf,
+  type Shape,
+} from "@/lib/shape";
 import type { Bbox } from "@/lib/types";
 
 interface Props {
@@ -42,7 +52,228 @@ interface Props {
   data: ElevationResponse;
   baseThicknessInches: number;
   verticalExaggeration: number;
+  engraveLabel: boolean;
+  engraveBrand: boolean;
   label?: string;
+}
+
+const BEVEL_DEG = 35;
+const BRAND_TEXT = "craftedcarving.com";
+const ENGRAVE_DEPTH_IN = 0.04; // ~1 mm
+const LABEL_CAP_HEIGHT_IN = 0.18;
+const BRAND_CAP_HEIGHT_IN = 0.12;
+const COMPASS_SIZE_IN = 0.45;
+
+interface ApplyEngravingsArgs {
+  scene: Scene;
+  font: opentype.Font;
+  /** Current plinth mesh (may be replaced with an engraved version). */
+  plinthMesh: Mesh | null;
+  /** Current terrain mesh (used as the brand host if no plinth). */
+  terrainMesh: Mesh;
+  shape: Shape;
+  widthInches: number;
+  heightInches: number;
+  rotation: number;
+  baseThicknessInches: number;
+  engraveLabel: boolean;
+  engraveBrand: boolean;
+  placeLabel: string;
+  plinthHeight: number;
+}
+
+interface ApplyEngravingsResult {
+  /** Replacement plinth mesh (engraved). Null if no plinth or no engraving. */
+  newPlinth: Mesh | null;
+  /** Replacement terrain mesh (only set if brand applied to terrain). */
+  newTerrain: Mesh | null;
+}
+
+/**
+ * Build engraving meshes (label, compass, brand) and subtract them from
+ * the plinth and/or terrain via Babylon CSG. Returns the replacement
+ * meshes — caller is responsible for updating refs and disposing the
+ * originals.
+ */
+async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravingsResult> {
+  const {
+    scene,
+    font,
+    plinthMesh,
+    terrainMesh,
+    widthInches,
+    heightInches,
+    rotation,
+    engraveLabel,
+    engraveBrand,
+    placeLabel,
+    plinthHeight,
+  } = args;
+
+  // South-edge midpoint of the shape, in shape-local coords. For
+  // rectangle / hex / circle, the bottom (south) extends to z =
+  // -heightInches/2 (for circle, heightInches == widthInches).
+  const southZ = -heightInches / 2;
+  const tanBevel = Math.tan((BEVEL_DEG * Math.PI) / 180);
+  const bevelW = plinthHeight / tanBevel;
+  const bevelMidZLocal = southZ - bevelW / 2;
+  const bevelMidYLocal = plinthHeight / 2;
+  const θ = (rotation * Math.PI) / 180;
+  const cosθ = Math.cos(θ);
+  const sinθ = Math.sin(θ);
+
+  const localToWorld = (lx: number, ly: number, lz: number) =>
+    new Vector3(lx * cosθ - lz * sinθ, ly, lx * sinθ + lz * cosθ);
+
+  // Engraving on the bevel: tilt by −BEVEL_DEG around local X first
+  // (so the polygon lays on the slope), then rotate by the shape's
+  // world rotation around Y. Quaternion multiplication in Babylon
+  // applies right-to-left, so qShape.multiply(qBevel) = bevel then shape.
+  const qBevel = Quaternion.RotationAxis(
+    new Vector3(1, 0, 0),
+    (-BEVEL_DEG * Math.PI) / 180,
+  );
+  const qShape = Quaternion.RotationAxis(new Vector3(0, 1, 0), θ);
+  const bevelEngravingRotation = qShape.multiply(qBevel);
+
+  const plinthNegatives: Mesh[] = [];
+  const brandNegatives: Mesh[] = [];
+
+  // --- Label text ---
+  if (engraveLabel && plinthMesh && placeLabel.trim()) {
+    const labelMesh = buildTextMesh({
+      font,
+      text: placeLabel,
+      size: LABEL_CAP_HEIGHT_IN,
+      depth: ENGRAVE_DEPTH_IN * 2,
+      scene,
+      name: "label-glyphs",
+    });
+    if (labelMesh) {
+      labelMesh.setEnabled(false);
+      const w = measureTextWidth(font, placeLabel, LABEL_CAP_HEIGHT_IN);
+      labelMesh.position.x = -w / 2;
+      labelMesh.bakeCurrentTransformIntoVertices();
+      const worldPos = localToWorld(0, bevelMidYLocal, bevelMidZLocal);
+      labelMesh.position = worldPos;
+      labelMesh.rotationQuaternion = bevelEngravingRotation;
+      plinthNegatives.push(labelMesh);
+    }
+  }
+
+  // --- Compass arrow ---
+  if (engraveLabel && plinthMesh) {
+    const compassMesh = buildCompassArrow({
+      size: COMPASS_SIZE_IN,
+      depth: ENGRAVE_DEPTH_IN * 2,
+      modelRotationDeg: rotation,
+      scene,
+      name: "compass",
+    });
+    if (compassMesh) {
+      compassMesh.setEnabled(false);
+      const offsetX = 0.55 * (widthInches / 2);
+      const worldPos = localToWorld(offsetX, bevelMidYLocal, bevelMidZLocal);
+      compassMesh.position = worldPos;
+      compassMesh.rotationQuaternion = bevelEngravingRotation;
+      plinthNegatives.push(compassMesh);
+    }
+  }
+
+  // --- Brand on bottom face ---
+  if (engraveBrand) {
+    const brandMesh = buildTextMesh({
+      font,
+      text: BRAND_TEXT,
+      size: BRAND_CAP_HEIGHT_IN,
+      depth: ENGRAVE_DEPTH_IN * 2,
+      scene,
+      name: "brand-glyphs",
+    });
+    if (brandMesh) {
+      brandMesh.setEnabled(false);
+      const w = measureTextWidth(font, BRAND_TEXT, BRAND_CAP_HEIGHT_IN);
+      brandMesh.position.x = -w / 2;
+      brandMesh.bakeCurrentTransformIntoVertices();
+      // Mirror X (readable when viewed from below) and flip Y so the
+      // extrusion points UP into the plinth interior. Position y just
+      // below 0 so the engraving slightly overlaps the bottom face —
+      // this avoids CSG degenerate-coplanar artifacts.
+      brandMesh.scaling = new Vector3(-1, -1, 1);
+      brandMesh.position.y = -0.005;
+      brandMesh.rotationQuaternion = qShape;
+      brandNegatives.push(brandMesh);
+    }
+  }
+
+  let newPlinth: Mesh | null = null;
+  let newTerrain: Mesh | null = null;
+
+  // CSG subtract plinth negatives from plinth.
+  if (plinthMesh && plinthNegatives.length) {
+    try {
+      for (const n of plinthNegatives) {
+        n.computeWorldMatrix(true);
+        n.bakeCurrentTransformIntoVertices();
+      }
+      plinthMesh.computeWorldMatrix(true);
+      let plinthCSG = CSG.FromMesh(plinthMesh);
+      for (const n of plinthNegatives) {
+        plinthCSG = plinthCSG.subtract(CSG.FromMesh(n));
+      }
+      const engraved = plinthCSG.toMesh(
+        "plinth-engraved",
+        plinthMesh.material,
+        scene,
+        true,
+      );
+      engraved.enableEdgesRendering(0.95);
+      engraved.edgesWidth = 1.5;
+      engraved.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
+      newPlinth = engraved;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[engraving] plinth CSG failed", err);
+    } finally {
+      for (const n of plinthNegatives) n.dispose();
+    }
+  }
+
+  // CSG subtract brand negatives from whichever has the bottom face.
+  if (brandNegatives.length) {
+    // Host is the engraved plinth (if any), then the original plinth,
+    // then the terrain.
+    const host = newPlinth ?? plinthMesh ?? terrainMesh;
+    try {
+      for (const n of brandNegatives) {
+        n.computeWorldMatrix(true);
+        n.bakeCurrentTransformIntoVertices();
+      }
+      host.computeWorldMatrix(true);
+      let hostCSG = CSG.FromMesh(host);
+      for (const n of brandNegatives) {
+        hostCSG = hostCSG.subtract(CSG.FromMesh(n));
+      }
+      const engraved = hostCSG.toMesh(host.name + "-engraved", host.material, scene, true);
+      engraved.enableEdgesRendering(0.95);
+      engraved.edgesWidth = 1.5;
+      engraved.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
+      if (host === terrainMesh) {
+        newTerrain = engraved;
+      } else {
+        // Replace newPlinth (or plinthMesh) with the brand-engraved one.
+        newPlinth?.dispose();
+        newPlinth = engraved;
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[engraving] brand CSG failed", err);
+    } finally {
+      for (const n of brandNegatives) n.dispose();
+    }
+  }
+
+  return { newPlinth, newTerrain };
 }
 
 const MM_PER_INCH = 25.4;
@@ -57,12 +288,15 @@ export default function ModelViewer({
   rotation,
   baseThicknessInches,
   verticalExaggeration,
+  engraveLabel,
+  engraveBrand,
   label,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const engineRef = useRef<Engine | null>(null);
   const sceneRef = useRef<Scene | null>(null);
   const terrainRef = useRef<Mesh | null>(null);
+  const plinthRef = useRef<Mesh | null>(null);
   const contoursRef = useRef<Mesh | null>(null);
   const lightRef = useRef<DirectionalLight | null>(null);
 
@@ -145,17 +379,24 @@ export default function ModelViewer({
       engineRef.current = null;
       sceneRef.current = null;
       terrainRef.current = null;
+      plinthRef.current = null;
       contoursRef.current = null;
       lightRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- 2. Rebuild terrain + contours whenever inputs change ---
+  // --- 2. Rebuild terrain + (optional) plinth + engravings ---
+  // The terrain VertexData is the same as before; the plinth is a
+  // separate mesh that sits beneath the terrain (terrain shifts up by
+  // plinthHeight). CSG operations engrave the label/compass into the
+  // plinth bevel and "craftedcarving.com" into the bottom face.
   useEffect(() => {
     const scene = sceneRef.current;
     const terrain = terrainRef.current;
     if (!scene || !terrain) return;
+
+    let cancelled = false;
 
     const meshSpec = {
       bbox,
@@ -236,10 +477,105 @@ export default function ModelViewer({
       lineMesh.setEnabled(showContours);
       contoursRef.current = lineMesh;
     }
+    // ---------- Plinth + engravings ----------
+    // Dispose any prior plinth.
+    plinthRef.current?.dispose();
+    plinthRef.current = null;
+
+    // Where the plinth meets the terrain (= terrain's base thickness).
+    const plinthTopY = baseThicknessInches;
+    // Shift the terrain up by plinthTopY when the plinth is present so
+    // its bottom face sits on the plinth top.
+    terrain.position.y = engraveLabel ? plinthTopY : 0;
+    terrain.computeWorldMatrix(true);
+
+    if (engraveLabel) {
+      const bevelW =
+        baseThicknessInches /
+        Math.tan((BEVEL_DEG * Math.PI) / 180);
+
+      const plinthResult = buildPlinth({
+        shape,
+        widthInches,
+        heightInches,
+        rotation,
+        bevelDeg: BEVEL_DEG,
+        bevelWidthInches: bevelW,
+        plinthTopY,
+      });
+
+      const plinthMesh = new Mesh("plinth", scene);
+      plinthResult.vertexData.applyToMesh(plinthMesh, true);
+      const plinthMat = new StandardMaterial("plinthMat", scene);
+      plinthMat.diffuseColor = new Color3(0.72, 0.73, 0.76);
+      plinthMat.specularColor = new Color3(0.03, 0.03, 0.04);
+      plinthMat.emissiveColor = new Color3(0.07, 0.07, 0.08);
+      plinthMat.backFaceCulling = false;
+      plinthMesh.material = plinthMat;
+      plinthMesh.enableEdgesRendering(0.95);
+      plinthMesh.edgesWidth = 1.5;
+      plinthMesh.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
+      plinthRef.current = plinthMesh;
+    }
+
+    // ---------- Async engraving via CSG ----------
+    // Font loading is async, and CSG.subtract can be slow on dense
+    // meshes, so we run engravings off the main paint and bail out if
+    // inputs change before we finish.
+    const doEngrave = (engraveLabel && plinthRef.current) || engraveBrand;
+    if (doEngrave) {
+      (async () => {
+        try {
+          const font = await loadFont();
+          if (cancelled) return;
+          const { newPlinth, newTerrain } = await applyEngravings({
+            scene,
+            font,
+            plinthMesh: plinthRef.current,
+            terrainMesh: terrain,
+            shape,
+            widthInches,
+            heightInches,
+            rotation,
+            baseThicknessInches,
+            engraveLabel,
+            engraveBrand,
+            placeLabel: label ?? "",
+            plinthHeight: plinthTopY,
+          });
+          if (cancelled) {
+            newPlinth?.dispose();
+            newTerrain?.dispose();
+            return;
+          }
+          // Replace plinth ref if we got an engraved version.
+          if (newPlinth) {
+            plinthRef.current?.dispose();
+            plinthRef.current = newPlinth;
+          }
+          // Replace terrain ref if the brand was engraved on the
+          // terrain (no plinth case). The new mesh inherits the
+          // material; we need to preserve the position offset.
+          if (newTerrain) {
+            const oldY = terrain.position.y;
+            newTerrain.position.y = oldY;
+            terrainRef.current = newTerrain;
+            terrain.dispose();
+          }
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error("[engraving] failed", err);
+        }
+      })();
+    }
+
     // showContours is intentionally not a dep — toggling it is handled by
     // the next effect, which avoids rebuilding the geometry.
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration]);
+  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label]);
 
   // --- 3. Toggle contour visibility without rebuilding ---
   useEffect(() => {
@@ -265,15 +601,28 @@ export default function ModelViewer({
     const scene = sceneRef.current;
     const terrain = terrainRef.current;
     if (!scene || !terrain) return;
-    // STL has no unit metadata, but slicers default to mm. We clone the
-    // mesh, scale to mm (× 25.4), bake the transform on export, dispose.
-    const clone = terrain.clone("export-stl", null, true);
-    if (!clone) return;
-    clone.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
+    // STL has no unit metadata, but slicers default to mm. We clone
+    // each mesh, scale to mm, bake the transform on export, then
+    // dispose the clones. When the plinth is present, both meshes are
+    // exported into one STL file.
+    const clones: Mesh[] = [];
+    const terrainClone = terrain.clone("export-terrain", null, true);
+    if (terrainClone) {
+      terrainClone.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
+      clones.push(terrainClone);
+    }
+    const plinth = plinthRef.current;
+    if (plinth) {
+      const plinthClone = plinth.clone("export-plinth", null, true);
+      if (plinthClone) {
+        plinthClone.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
+        clones.push(plinthClone);
+      }
+    }
+    if (!clones.length) return;
     const filename = (label ? slug(label) : "ski-model") + ".stl";
-    // CreateSTL: (meshes, download, fileName, binary, isLittleEndian, doNotBakeTransform)
-    STLExport.CreateSTL([clone], true, filename, true, true, false);
-    clone.dispose();
+    STLExport.CreateSTL(clones, true, filename, true, true, false);
+    for (const c of clones) c.dispose();
   }, [label]);
 
   return (
