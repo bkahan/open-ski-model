@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="36" fill="#0b1220"/>
+  <!-- stylized contour-line mountain -->
+  <g fill="none" stroke="#f5b942" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M24 150 L72 90 L96 110 L120 80 L168 150 Z"/>
+    <path d="M40 135 L72 105 L96 120 L120 95 L152 135"/>
+    <path d="M56 122 L78 110 L98 122 L118 108 L140 122"/>
+    <path d="M72 110 L96 118"/>
+  </g>
+  <circle cx="120" cy="80" r="5" fill="#f5b942"/>
+</svg>

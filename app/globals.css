@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* MapLibre wants its own stylesheet. We import it directly in the
+   client component (see components/MapPicker.tsx) so server components
+   stay lean. */
+
+html,
+body {
+  height: 100%;
+  background: #0b1220;
+  color: #e6ecf3;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Bbox overlay drawn on top of the MapLibre canvas */
+.bbox-overlay {
+  position: absolute;
+  pointer-events: none;
+  border: 2px solid #f5b942;
+  background: rgba(245, 185, 66, 0.08);
+  box-shadow: 0 0 0 9999px rgba(11, 18, 32, 0.35);
+  border-radius: 2px;
+}
+
+.bbox-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: #f5b942;
+  border: 2px solid #0b1220;
+  border-radius: 50%;
+  pointer-events: auto;
+  cursor: nwse-resize;
+}
+
+.bbox-handle.move {
+  cursor: grab;
+}
+
+.bbox-handle.move:active {
+  cursor: grabbing;
+}
