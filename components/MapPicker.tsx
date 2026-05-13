@@ -153,13 +153,7 @@ export default function MapPicker({
     overlay.style.width = `${width}px`;
     overlay.style.height = `${height}px`;
 
-    // position handles at center and SE corner
-    const moveH = handleRefs.current.move;
     const resizeH = handleRefs.current.resize;
-    if (moveH) {
-      moveH.style.left = `${left + width / 2 - 7}px`;
-      moveH.style.top = `${top + height / 2 - 7}px`;
-    }
     if (resizeH) {
       resizeH.style.left = `${left + width - 7}px`;
       resizeH.style.top = `${top + height - 7}px`;
@@ -177,27 +171,25 @@ export default function MapPicker({
     map.flyTo({ center: flyTo, zoom: Math.max(map.getZoom(), 12), duration: 800 });
   }, [flyTo]);
 
-  // --- 4. Drag-to-move ---
+  // --- 4. Drag-to-move (anywhere inside the bbox overlay) ---
   useEffect(() => {
     const map = mapRef.current;
-    const handle = handleRefs.current.move;
-    if (!map || !handle) return;
+    const overlay = overlayRef.current;
+    if (!map || !overlay) return;
 
     let dragging = false;
     let startPx = { x: 0, y: 0 };
-    let startCenter: LngLat | null = null;
 
     const onDown = (e: PointerEvent) => {
       const b = bboxRef.current;
       if (!b) return;
       dragging = true;
       startPx = { x: e.clientX, y: e.clientY };
-      startCenter = bboxCenter(b);
-      handle.setPointerCapture(e.pointerId);
+      overlay.setPointerCapture(e.pointerId);
       map.dragPan.disable();
     };
     const onMove = (e: PointerEvent) => {
-      if (!dragging || !startCenter) return;
+      if (!dragging) return;
       const b = bboxRef.current;
       if (!b) return;
       const dx = e.clientX - startPx.x;
@@ -215,22 +207,48 @@ export default function MapPicker({
     const onUp = (e: PointerEvent) => {
       dragging = false;
       try {
-        handle.releasePointerCapture(e.pointerId);
+        overlay.releasePointerCapture(e.pointerId);
       } catch {
         /* ignore */
       }
       map.dragPan.enable();
     };
 
-    handle.addEventListener("pointerdown", onDown);
-    handle.addEventListener("pointermove", onMove);
-    handle.addEventListener("pointerup", onUp);
-    handle.addEventListener("pointercancel", onUp);
+    // The overlay sits above the MapLibre canvas with pointer-events: auto,
+    // which would otherwise swallow scroll-zoom. Re-dispatch wheel events to
+    // the canvas so the user can zoom while their cursor is inside the bbox.
+    const canvas = map.getCanvas();
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      canvas.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaX: e.deltaX,
+          deltaY: e.deltaY,
+          deltaZ: e.deltaZ,
+          deltaMode: e.deltaMode,
+          clientX: e.clientX,
+          clientY: e.clientY,
+          ctrlKey: e.ctrlKey,
+          shiftKey: e.shiftKey,
+          altKey: e.altKey,
+          metaKey: e.metaKey,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+
+    overlay.addEventListener("pointerdown", onDown);
+    overlay.addEventListener("pointermove", onMove);
+    overlay.addEventListener("pointerup", onUp);
+    overlay.addEventListener("pointercancel", onUp);
+    overlay.addEventListener("wheel", onWheel, { passive: false });
     return () => {
-      handle.removeEventListener("pointerdown", onDown);
-      handle.removeEventListener("pointermove", onMove);
-      handle.removeEventListener("pointerup", onUp);
-      handle.removeEventListener("pointercancel", onUp);
+      overlay.removeEventListener("pointerdown", onDown);
+      overlay.removeEventListener("pointermove", onMove);
+      overlay.removeEventListener("pointerup", onUp);
+      overlay.removeEventListener("pointercancel", onUp);
+      overlay.removeEventListener("wheel", onWheel);
     };
   }, []);
 
@@ -288,12 +306,9 @@ export default function MapPicker({
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="absolute inset-0" />
-      <div ref={overlayRef} className="bbox-overlay" />
       <div
-        ref={(el) => {
-          handleRefs.current.move = el;
-        }}
-        className="bbox-handle move"
+        ref={overlayRef}
+        className="bbox-overlay"
         aria-label="Move bounding box"
         role="button"
         tabIndex={0}

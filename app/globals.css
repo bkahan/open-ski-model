@@ -17,11 +17,17 @@ body {
 /* Bbox overlay drawn on top of the MapLibre canvas */
 .bbox-overlay {
   position: absolute;
-  pointer-events: none;
+  pointer-events: auto;
   border: 2px solid #f5b942;
   background: rgba(245, 185, 66, 0.08);
   box-shadow: 0 0 0 9999px rgba(11, 18, 32, 0.35);
   border-radius: 2px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.bbox-overlay:active {
+  cursor: grabbing;
 }
 
 .bbox-handle {
@@ -33,12 +39,4 @@ body {
   border-radius: 50%;
   pointer-events: auto;
   cursor: nwse-resize;
-}
-
-.bbox-handle.move {
-  cursor: grab;
-}
-
-.bbox-handle.move:active {
-  cursor: grabbing;
 }
