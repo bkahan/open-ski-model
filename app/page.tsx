@@ -20,6 +20,7 @@
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import DensityControls from "@/components/DensityControls";
 import SearchBar from "@/components/SearchBar";
 import ShapeControls from "@/components/ShapeControls";
 import SizeControls, { type SizeState } from "@/components/SizeControls";
@@ -62,6 +63,8 @@ const ModelViewer = dynamic(() => import("@/components/ModelViewer"), {
 const DEFAULT_CENTER: LngLat = [-72.5, 44.93];
 const DEFAULT_SHAPE_WIDTH_METERS = 5_000;
 const DEFAULT_GRID_SIZE = 256;
+const MIN_GRID_SIZE = 64;
+const MAX_GRID_SIZE = 2048;
 
 type View = "map" | "loading" | "viewer";
 
@@ -119,6 +122,7 @@ export default function Home() {
   });
   const [shape, setShape] = useState<Shape>("rectangle");
   const [rotation, setRotation] = useState(0);
+  const [gridSize, setGridSize] = useState<number>(DEFAULT_GRID_SIZE);
   const [bbox, setBbox] = useState<Bbox | null>(null);
   const [flyTo, setFlyTo] = useState<LngLat | null>(null);
   const [label, setLabel] = useState<string | undefined>("Jay Peak");
@@ -154,6 +158,11 @@ export default function Home() {
       verticalExaggeration: parsed.verticalExaggeration ?? 2,
       aspectLocked: locked,
     });
+    if (parsed.gridSize !== undefined) {
+      setGridSize(
+        Math.max(MIN_GRID_SIZE, Math.min(MAX_GRID_SIZE, parsed.gridSize)),
+      );
+    }
     if (parsed.label) setLabel(parsed.label);
     if (parsed.bbox) {
       setBbox(parsed.bbox);
@@ -178,11 +187,12 @@ export default function Home() {
         baseThicknessInches: size.baseThicknessInches,
         verticalExaggeration: size.verticalExaggeration,
         aspectLocked: size.aspectLocked,
+        gridSize,
         label,
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [bbox, shape, rotation, size, label]);
+  }, [bbox, shape, rotation, size, gridSize, label]);
 
   // All bbox refits are done inside the explicit handlers (handleShapeChange,
   // handleSizeChange, etc.) since they already know the old state. We
@@ -356,7 +366,7 @@ export default function Home() {
     try {
       const payload: ElevationRequest = {
         bbox,
-        gridSize: DEFAULT_GRID_SIZE,
+        gridSize,
         source: "auto",
       };
       const res = await fetch("/api/elevation", {
@@ -415,6 +425,8 @@ export default function Home() {
           bbox={bbox}
           onShapeWidthMetersChange={handleShapeWidthMetersChange}
         />
+
+        <DensityControls gridSize={gridSize} onChange={setGridSize} />
 
         {view === "viewer" && snapshot && (
           <div className="text-xs text-slate-400 bg-slate-900/60 border border-slate-800 rounded-md p-3 space-y-1 font-mono">
