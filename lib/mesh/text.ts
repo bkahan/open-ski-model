@@ -215,9 +215,13 @@ export function buildTextMesh(opts: TextMeshOptions): Mesh | null {
       h.map(([x, y]) => new Vector3(x, 0, y)),
     );
     try {
+      // No DOUBLESIDE — CSG.subtract requires a closed, single-sided
+      // mesh. Two-sided polygons turn each face into back-to-back
+      // triangles with opposite winding, which CSG treats as a
+      // non-manifold.
       const m = MeshBuilder.ExtrudePolygon(
         `${opts.name ?? "text"}-${gi}`,
-        { shape, holes, depth, sideOrientation: Mesh.DOUBLESIDE },
+        { shape, holes, depth },
         scene,
         earcut,
       );
@@ -230,7 +234,9 @@ export function buildTextMesh(opts: TextMeshOptions): Mesh | null {
     }
   }
   if (meshes.length === 0) return null;
-  const merged = Mesh.MergeMeshes(meshes, true, true, undefined, false, true);
+  // multiMultiMaterials=false → single-material merged mesh, which is
+  // what CSG expects.
+  const merged = Mesh.MergeMeshes(meshes, true, true, undefined, false, false);
   if (merged) merged.name = opts.name ?? "text";
   return merged;
 }

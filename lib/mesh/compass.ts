@@ -56,9 +56,10 @@ export function buildCompassArrow(opts: CompassMeshOptions): Mesh | null {
   const rotated = canonical.map(([x, y]) => [x * c - y * s, x * s + y * c]);
   const shape = rotated.map(([x, y]) => new Vector3(x, 0, y));
   try {
+    // Single-sided so CSG.subtract sees a watertight volume.
     const m = MeshBuilder.ExtrudePolygon(
       opts.name ?? "compass",
-      { shape, depth, sideOrientation: Mesh.DOUBLESIDE },
+      { shape, depth },
       scene,
       earcut,
     );

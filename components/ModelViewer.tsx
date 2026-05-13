@@ -195,13 +195,17 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
       const w = measureTextWidth(font, BRAND_TEXT, BRAND_CAP_HEIGHT_IN);
       brandMesh.position.x = -w / 2;
       brandMesh.bakeCurrentTransformIntoVertices();
-      // Mirror X (readable when viewed from below) and flip Y so the
-      // extrusion points UP into the plinth interior. Position y just
-      // below 0 so the engraving slightly overlaps the bottom face —
-      // this avoids CSG degenerate-coplanar artifacts.
-      brandMesh.scaling = new Vector3(-1, -1, 1);
+      // 180° rotation around X flips the extrusion direction so the
+      // depth points UP into the model AND inverts Z (letter-top now
+      // points south). Combined with qShape this matches what a viewer
+      // sees when they look at the underside. Importantly we do NOT
+      // use negative scaling — that would invert face winding and
+      // CSG.subtract would see the brand mesh as the COMPLEMENT volume
+      // (effectively no-op or worse, eating the entire host).
+      const qXFlip = Quaternion.RotationAxis(new Vector3(1, 0, 0), Math.PI);
+      brandMesh.rotationQuaternion = qShape.multiply(qXFlip);
+      // Slight overlap below y=0 so CSG doesn't trip on coplanar faces.
       brandMesh.position.y = -0.005;
-      brandMesh.rotationQuaternion = qShape;
       brandNegatives.push(brandMesh);
     }
   }
@@ -227,10 +231,19 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
         scene,
         true,
       );
-      engraved.enableEdgesRendering(0.95);
-      engraved.edgesWidth = 1.5;
-      engraved.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
-      newPlinth = engraved;
+      // Sanity check: CSG occasionally returns an empty mesh when the
+      // inputs aren't perfectly watertight. Keep the original plinth
+      // in that case rather than replacing it with nothing.
+      if (engraved.getTotalVertices() === 0) {
+        // eslint-disable-next-line no-console
+        console.warn("[engraving] plinth CSG produced empty mesh — keeping original plinth");
+        engraved.dispose();
+      } else {
+        engraved.enableEdgesRendering(0.95);
+        engraved.edgesWidth = 1.5;
+        engraved.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
+        newPlinth = engraved;
+      }
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn("[engraving] plinth CSG failed", err);
@@ -255,15 +268,21 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
         hostCSG = hostCSG.subtract(CSG.FromMesh(n));
       }
       const engraved = hostCSG.toMesh(host.name + "-engraved", host.material, scene, true);
-      engraved.enableEdgesRendering(0.95);
-      engraved.edgesWidth = 1.5;
-      engraved.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
-      if (host === terrainMesh) {
-        newTerrain = engraved;
+      if (engraved.getTotalVertices() === 0) {
+        // eslint-disable-next-line no-console
+        console.warn("[engraving] brand CSG produced empty mesh — keeping original host");
+        engraved.dispose();
       } else {
-        // Replace newPlinth (or plinthMesh) with the brand-engraved one.
-        newPlinth?.dispose();
-        newPlinth = engraved;
+        engraved.enableEdgesRendering(0.95);
+        engraved.edgesWidth = 1.5;
+        engraved.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
+        if (host === terrainMesh) {
+          newTerrain = engraved;
+        } else {
+          // Replace newPlinth (or plinthMesh) with the brand-engraved one.
+          newPlinth?.dispose();
+          newPlinth = engraved;
+        }
       }
     } catch (err) {
       // eslint-disable-next-line no-console
