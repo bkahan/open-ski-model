@@ -298,6 +298,8 @@ export default function ModelViewer({
   const terrainRef = useRef<Mesh | null>(null);
   const plinthRef = useRef<Mesh | null>(null);
   const contoursRef = useRef<Mesh | null>(null);
+  const terrainMatRef = useRef<StandardMaterial | null>(null);
+  const plinthMatRef = useRef<StandardMaterial | null>(null);
   const lightRef = useRef<DirectionalLight | null>(null);
 
   const [sunAzimuth, setSunAzimuth] = useState(135); // degrees
@@ -348,25 +350,22 @@ export default function ModelViewer({
     dir.intensity = 0.65;
     lightRef.current = dir;
 
-    const terrain = new Mesh("terrain", scene);
+    // Materials are persistent across builds; the meshes themselves are
+    // recreated each rebuild (so CSG engravings can cleanly replace them
+    // without re-application wiping the engraving on the next render).
     const mat = new StandardMaterial("terrainMat", scene);
-    // Solid medium gray with soft hillshade — reads cleanly as a topo
-    // model without dark-on-dark palette confusion.
     mat.diffuseColor = new Color3(0.82, 0.83, 0.85);
     mat.specularColor = new Color3(0.03, 0.03, 0.04);
-    mat.emissiveColor = new Color3(0.08, 0.08, 0.09); // floor of brightness
+    mat.emissiveColor = new Color3(0.08, 0.08, 0.09);
     mat.backFaceCulling = false;
-    terrain.material = mat;
+    terrainMatRef.current = mat;
 
-    // External silhouette: edges between adjacent triangles whose normals
-    // differ by more than ~18° (epsilon 0.95) get drawn as thin dark
-    // lines. Gives the model a clean outline against the background and
-    // sharpens the seam between top surface and side walls.
-    terrain.enableEdgesRendering(0.95);
-    terrain.edgesWidth = 1.5;
-    terrain.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
-
-    terrainRef.current = terrain;
+    const pmat = new StandardMaterial("plinthMat", scene);
+    pmat.diffuseColor = new Color3(0.72, 0.73, 0.76);
+    pmat.specularColor = new Color3(0.03, 0.03, 0.04);
+    pmat.emissiveColor = new Color3(0.07, 0.07, 0.08);
+    pmat.backFaceCulling = false;
+    plinthMatRef.current = pmat;
 
     engine.runRenderLoop(() => scene.render());
 
@@ -393,10 +392,16 @@ export default function ModelViewer({
   // plinth bevel and "craftedcarving.com" into the bottom face.
   useEffect(() => {
     const scene = sceneRef.current;
-    const terrain = terrainRef.current;
-    if (!scene || !terrain) return;
+    const terrainMat = terrainMatRef.current;
+    const plinthMat = plinthMatRef.current;
+    if (!scene || !terrainMat || !plinthMat) return;
 
     let cancelled = false;
+
+    // Dispose any prior meshes — we always rebuild from scratch so CSG
+    // engravings don't get wiped by applyToMesh on the next rebuild.
+    terrainRef.current?.dispose();
+    plinthRef.current?.dispose();
 
     const meshSpec = {
       bbox,
@@ -413,13 +418,22 @@ export default function ModelViewer({
     const { vertexData, inPerMeter } = needsMask
       ? buildShapedWatertight(meshSpec, shape, rotation)
       : buildWatertight(meshSpec);
+
+    const terrain = new Mesh("terrain", scene);
+    terrain.material = terrainMat;
     vertexData.applyToMesh(terrain, true);
-    // applyToMesh swaps vertex buffers; the edges renderer caches edge
-    // topology, so refresh it now that the geometry has changed.
-    terrain.disableEdgesRendering();
     terrain.enableEdgesRendering(0.95);
     terrain.edgesWidth = 1.5;
     terrain.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
+    terrainRef.current = terrain;
+
+    // The plinth occupies y ∈ [0, plinthTopY]; when present, the
+    // terrain is shifted up so its bottom sits on the plinth's top.
+    // We need this constant before the contour block (contours shift
+    // with the terrain) and before the plinth construction below.
+    const plinthTopY = baseThicknessInches;
+    terrain.position.y = engraveLabel ? plinthTopY : 0;
+    terrain.computeWorldMatrix(true);
 
     // Rebuild contour lines (replace any previous mesh). For non-rect
     // shapes, mask off cells outside the shape so the lines stop at the
@@ -472,23 +486,18 @@ export default function ModelViewer({
         { lines },
         scene,
       );
-      lineMesh.color = new Color3(0.08, 0.10, 0.14);
+      // Slightly lifted dark line — readable on the mid-gray terrain.
+      lineMesh.color = new Color3(0.18, 0.21, 0.26);
       lineMesh.isPickable = false;
+      // Contour y-values are computed relative to the terrain's own
+      // origin (base = baseThicknessInches). When the plinth is enabled
+      // the terrain mesh shifts UP by plinthTopY; the contours need the
+      // same shift or they hide INSIDE the plinth.
+      lineMesh.position.y = engraveLabel ? plinthTopY : 0;
       lineMesh.setEnabled(showContours);
       contoursRef.current = lineMesh;
     }
-    // ---------- Plinth + engravings ----------
-    // Dispose any prior plinth.
-    plinthRef.current?.dispose();
-    plinthRef.current = null;
-
-    // Where the plinth meets the terrain (= terrain's base thickness).
-    const plinthTopY = baseThicknessInches;
-    // Shift the terrain up by plinthTopY when the plinth is present so
-    // its bottom face sits on the plinth top.
-    terrain.position.y = engraveLabel ? plinthTopY : 0;
-    terrain.computeWorldMatrix(true);
-
+    // ---------- Plinth ----------
     if (engraveLabel) {
       const bevelW =
         baseThicknessInches /
@@ -505,13 +514,8 @@ export default function ModelViewer({
       });
 
       const plinthMesh = new Mesh("plinth", scene);
-      plinthResult.vertexData.applyToMesh(plinthMesh, true);
-      const plinthMat = new StandardMaterial("plinthMat", scene);
-      plinthMat.diffuseColor = new Color3(0.72, 0.73, 0.76);
-      plinthMat.specularColor = new Color3(0.03, 0.03, 0.04);
-      plinthMat.emissiveColor = new Color3(0.07, 0.07, 0.08);
-      plinthMat.backFaceCulling = false;
       plinthMesh.material = plinthMat;
+      plinthResult.vertexData.applyToMesh(plinthMesh, true);
       plinthMesh.enableEdgesRendering(0.95);
       plinthMesh.edgesWidth = 1.5;
       plinthMesh.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
@@ -597,32 +601,63 @@ export default function ModelViewer({
   }, [sunAzimuth]);
 
   // --- 5. STL export ---
+  // When the plinth is present we CSG-union it with the terrain so the
+  // exported STL is a single watertight solid (separate meshes would
+  // produce non-manifold seams where the plinth top meets the terrain
+  // bottom). Plinth + terrain union is small relative to the engraving
+  // subtracts — it should finish in well under a second even at high
+  // density.
   const exportSTL = useCallback(() => {
     const scene = sceneRef.current;
     const terrain = terrainRef.current;
     if (!scene || !terrain) return;
-    // STL has no unit metadata, but slicers default to mm. We clone
-    // each mesh, scale to mm, bake the transform on export, then
-    // dispose the clones. When the plinth is present, both meshes are
-    // exported into one STL file.
-    const clones: Mesh[] = [];
-    const terrainClone = terrain.clone("export-terrain", null, true);
-    if (terrainClone) {
-      terrainClone.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
-      clones.push(terrainClone);
-    }
     const plinth = plinthRef.current;
+
+    let exportMesh: Mesh | null = null;
     if (plinth) {
-      const plinthClone = plinth.clone("export-plinth", null, true);
-      if (plinthClone) {
-        plinthClone.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
-        clones.push(plinthClone);
+      try {
+        terrain.computeWorldMatrix(true);
+        plinth.computeWorldMatrix(true);
+        const unionCSG = CSG.FromMesh(terrain).union(CSG.FromMesh(plinth));
+        exportMesh = unionCSG.toMesh(
+          "export-union",
+          terrain.material,
+          scene,
+          true,
+        );
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("[stl] union failed; falling back to multi-mesh export", err);
       }
     }
-    if (!clones.length) return;
+    if (!exportMesh) {
+      // Fallback: clone meshes and export them as multiple shells. This
+      // is what users were getting before; it works but produces a
+      // technically non-manifold STL.
+      const clones: Mesh[] = [];
+      const terrainClone = terrain.clone("export-terrain", null, true);
+      if (terrainClone) {
+        terrainClone.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
+        clones.push(terrainClone);
+      }
+      if (plinth) {
+        const plinthClone = plinth.clone("export-plinth", null, true);
+        if (plinthClone) {
+          plinthClone.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
+          clones.push(plinthClone);
+        }
+      }
+      if (!clones.length) return;
+      const filename = (label ? slug(label) : "ski-model") + ".stl";
+      STLExport.CreateSTL(clones, true, filename, true, true, false);
+      for (const c of clones) c.dispose();
+      return;
+    }
+
+    exportMesh.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
     const filename = (label ? slug(label) : "ski-model") + ".stl";
-    STLExport.CreateSTL(clones, true, filename, true, true, false);
-    for (const c of clones) c.dispose();
+    STLExport.CreateSTL([exportMesh], true, filename, true, true, false);
+    exportMesh.dispose();
   }, [label]);
 
   return (
