@@ -23,6 +23,7 @@ import {
   Scene,
   StandardMaterial,
   Vector3,
+  VertexBuffer,
 } from "@babylonjs/core";
 import { STLExport } from "@babylonjs/serializers/stl";
 import type * as opentype from "opentype.js";
@@ -31,6 +32,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { buildWatertight, buildShapedWatertight } from "@/lib/mesh/watertight";
 import { buildContourLines } from "@/lib/mesh/contours";
 import { buildPlinth } from "@/lib/mesh/plinth";
+import { exportToStep } from "@/lib/mesh/step-export";
 import { buildTextMesh, loadFont, measureTextWidth } from "@/lib/mesh/text";
 import { buildCompassArrow } from "@/lib/mesh/compass";
 import type { ElevationResponse } from "@/lib/elevation/types";
@@ -750,6 +752,105 @@ export default function ModelViewer({
     for (const fc of fallbackClones) fc.dispose();
   }, [label]);
 
+  // --- 6. STEP export ---
+  // STEP gives a true B-rep solid (each triangle → an ADVANCED_FACE in
+  // a single MANIFOLD_SOLID_BREP) so CAD apps like Fusion / SolidWorks
+  // open the model as one selectable object rather than a triangle
+  // soup. We concatenate terrain + plinth + any raised-fallback
+  // engravings into one big vertex buffer; the exporter dedupes
+  // coincident vertices so adjacent meshes fuse into a single solid.
+  const exportSTEP = useCallback(() => {
+    const scene = sceneRef.current;
+    const terrain = terrainRef.current;
+    if (!scene || !terrain) return;
+    const plinth = plinthRef.current;
+
+    // 1. Build the list of meshes to include. Try CSG-union plinth +
+    //    terrain first so the seam closes cleanly; fall back to two
+    //    separate meshes (the exporter will fuse them by position
+    //    dedup).
+    const meshes: Mesh[] = [];
+    let unionMesh: Mesh | null = null;
+    if (plinth) {
+      try {
+        terrain.computeWorldMatrix(true);
+        plinth.computeWorldMatrix(true);
+        const u = CSG.FromMesh(terrain).union(CSG.FromMesh(plinth));
+        unionMesh = u.toMesh("export-step", null, scene, true);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("[step] CSG union failed; using separate meshes", err);
+      }
+    }
+    if (unionMesh) {
+      meshes.push(unionMesh);
+    } else {
+      const tc = terrain.clone("export-step-terrain", null, true);
+      if (tc) {
+        tc.computeWorldMatrix(true);
+        tc.bakeCurrentTransformIntoVertices();
+        meshes.push(tc);
+      }
+      if (plinth) {
+        const pc = plinth.clone("export-step-plinth", null, true);
+        if (pc) {
+          pc.computeWorldMatrix(true);
+          pc.bakeCurrentTransformIntoVertices();
+          meshes.push(pc);
+        }
+      }
+    }
+    for (const f of engravingFallbackRef.current) {
+      const fc = f.clone(`export-step-${f.name}`, null, true);
+      if (fc) {
+        fc.computeWorldMatrix(true);
+        fc.bakeCurrentTransformIntoVertices();
+        meshes.push(fc);
+      }
+    }
+    if (meshes.length === 0) return;
+
+    // 2. Concatenate positions + indices (with index offsets).
+    const allPositions: number[] = [];
+    const allIndices: number[] = [];
+    for (const m of meshes) {
+      const p = m.getVerticesData(VertexBuffer.PositionKind);
+      const idx = m.getIndices();
+      if (!p || !idx) continue;
+      const vertOffset = allPositions.length / 3;
+      for (let i = 0; i < p.length; i++) allPositions.push(p[i]);
+      for (let i = 0; i < idx.length; i++) allIndices.push(idx[i] + vertOffset);
+    }
+
+    // 3. Generate STEP text.
+    const stepName = label ? slug(label) : "ski-model";
+    let stepStr: string;
+    try {
+      stepStr = exportToStep(
+        { positions: allPositions, indices: allIndices },
+        { name: stepName, unitScale: MM_PER_INCH },
+      );
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[step] export failed", err);
+      for (const m of meshes) m.dispose();
+      return;
+    }
+
+    // 4. Trigger download.
+    const blob = new Blob([stepStr], { type: "application/STEP" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = stepName + ".step";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    for (const m of meshes) m.dispose();
+  }, [label]);
+
   return (
     <div className="relative w-full h-full">
       <canvas
@@ -787,9 +888,15 @@ export default function ModelViewer({
         >
           Export STL
         </button>
+        <button
+          type="button"
+          onClick={exportSTEP}
+          className="w-full rounded-md border border-amber-400/60 text-amber-200 font-semibold py-1.5 hover:bg-amber-400/10 transition"
+        >
+          Export STEP
+        </button>
         <p className="text-[10px] text-slate-500 leading-snug">
-          STL exports in millimeters — your slicer will treat it as life-size at
-          the chosen print dimensions.
+          STL for slicers, STEP for CAD. Both export in millimeters.
         </p>
       </div>
     </div>
