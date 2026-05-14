@@ -87,6 +87,12 @@ interface ApplyEngravingsResult {
   newPlinth: Mesh | null;
   /** Replacement terrain mesh (only set if brand applied to terrain). */
   newTerrain: Mesh | null;
+  /**
+   * Engraving meshes left visible because CSG didn't produce a usable
+   * result. The caller should keep these around as raised features
+   * (and include them in the STL).
+   */
+  raisedFallback: Mesh[];
 }
 
 /**
@@ -150,14 +156,19 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
       name: "label-glyphs",
     });
     if (labelMesh) {
-      labelMesh.setEnabled(false);
       const w = measureTextWidth(font, placeLabel, LABEL_CAP_HEIGHT_IN);
       labelMesh.position.x = -w / 2;
       labelMesh.bakeCurrentTransformIntoVertices();
       const worldPos = localToWorld(0, bevelMidYLocal, bevelMidZLocal);
       labelMesh.position = worldPos;
       labelMesh.rotationQuaternion = bevelEngravingRotation;
+      labelMesh.material = plinthMesh.material;
+      // eslint-disable-next-line no-console
+      console.log("[engraving] label mesh:", labelMesh.getTotalVertices(), "verts at", worldPos);
       plinthNegatives.push(labelMesh);
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn("[engraving] label mesh was null (buildTextMesh failed)");
     }
   }
 
@@ -171,12 +182,17 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
       name: "compass",
     });
     if (compassMesh) {
-      compassMesh.setEnabled(false);
       const offsetX = 0.55 * (widthInches / 2);
       const worldPos = localToWorld(offsetX, bevelMidYLocal, bevelMidZLocal);
       compassMesh.position = worldPos;
       compassMesh.rotationQuaternion = bevelEngravingRotation;
+      compassMesh.material = plinthMesh.material;
+      // eslint-disable-next-line no-console
+      console.log("[engraving] compass mesh:", compassMesh.getTotalVertices(), "verts at", worldPos);
       plinthNegatives.push(compassMesh);
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn("[engraving] compass mesh was null");
     }
   }
 
@@ -191,36 +207,39 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
       name: "brand-glyphs",
     });
     if (brandMesh) {
-      brandMesh.setEnabled(false);
       const w = measureTextWidth(font, BRAND_TEXT, BRAND_CAP_HEIGHT_IN);
       brandMesh.position.x = -w / 2;
       brandMesh.bakeCurrentTransformIntoVertices();
-      // 180° rotation around X flips the extrusion direction so the
-      // depth points UP into the model AND inverts Z (letter-top now
-      // points south). Combined with qShape this matches what a viewer
-      // sees when they look at the underside. Importantly we do NOT
-      // use negative scaling — that would invert face winding and
-      // CSG.subtract would see the brand mesh as the COMPLEMENT volume
-      // (effectively no-op or worse, eating the entire host).
       const qXFlip = Quaternion.RotationAxis(new Vector3(1, 0, 0), Math.PI);
       brandMesh.rotationQuaternion = qShape.multiply(qXFlip);
-      // Slight overlap below y=0 so CSG doesn't trip on coplanar faces.
       brandMesh.position.y = -0.005;
+      // eslint-disable-next-line no-console
+      console.log("[engraving] brand mesh:", brandMesh.getTotalVertices(), "verts");
+      // Use whichever material we'll engrave into so the visible
+      // fallback mesh matches its host.
+      brandMesh.material = (plinthMesh ?? terrainMesh).material;
       brandNegatives.push(brandMesh);
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn("[engraving] brand mesh was null (buildTextMesh failed)");
     }
   }
 
   let newPlinth: Mesh | null = null;
   let newTerrain: Mesh | null = null;
+  const raisedFallback: Mesh[] = [];
 
   // CSG subtract plinth negatives from plinth.
   if (plinthMesh && plinthNegatives.length) {
+    let csgOk = false;
     try {
       for (const n of plinthNegatives) {
         n.computeWorldMatrix(true);
         n.bakeCurrentTransformIntoVertices();
       }
       plinthMesh.computeWorldMatrix(true);
+      // eslint-disable-next-line no-console
+      console.log("[engraving] plinth CSG: subtracting", plinthNegatives.length, "from", plinthMesh.getTotalVertices(), "verts");
       let plinthCSG = CSG.FromMesh(plinthMesh);
       for (const n of plinthNegatives) {
         plinthCSG = plinthCSG.subtract(CSG.FromMesh(n));
@@ -231,46 +250,57 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
         scene,
         true,
       );
-      // Sanity check: CSG occasionally returns an empty mesh when the
-      // inputs aren't perfectly watertight. Keep the original plinth
-      // in that case rather than replacing it with nothing.
+      // eslint-disable-next-line no-console
+      console.log("[engraving] plinth CSG result:", engraved.getTotalVertices(), "verts");
       if (engraved.getTotalVertices() === 0) {
         // eslint-disable-next-line no-console
-        console.warn("[engraving] plinth CSG produced empty mesh — keeping original plinth");
+        console.warn("[engraving] plinth CSG produced empty mesh — falling back to raised");
         engraved.dispose();
       } else {
         engraved.enableEdgesRendering(0.95);
         engraved.edgesWidth = 1.5;
         engraved.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
         newPlinth = engraved;
+        csgOk = true;
       }
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn("[engraving] plinth CSG failed", err);
-    } finally {
+      console.warn("[engraving] plinth CSG failed — falling back to raised", err);
+    }
+    if (csgOk) {
+      // CSG succeeded — engravings are now part of the plinth, so the
+      // temp meshes are no longer needed.
       for (const n of plinthNegatives) n.dispose();
+    } else {
+      // Keep the engraving meshes around as raised fallback so the user
+      // still sees something. They penetrate the surface; the visible
+      // portion poking out reads as raised text.
+      for (const n of plinthNegatives) raisedFallback.push(n);
     }
   }
 
   // CSG subtract brand negatives from whichever has the bottom face.
   if (brandNegatives.length) {
-    // Host is the engraved plinth (if any), then the original plinth,
-    // then the terrain.
     const host = newPlinth ?? plinthMesh ?? terrainMesh;
+    let csgOk = false;
     try {
       for (const n of brandNegatives) {
         n.computeWorldMatrix(true);
         n.bakeCurrentTransformIntoVertices();
       }
       host.computeWorldMatrix(true);
+      // eslint-disable-next-line no-console
+      console.log("[engraving] brand CSG: host", host.name, "with", host.getTotalVertices(), "verts");
       let hostCSG = CSG.FromMesh(host);
       for (const n of brandNegatives) {
         hostCSG = hostCSG.subtract(CSG.FromMesh(n));
       }
       const engraved = hostCSG.toMesh(host.name + "-engraved", host.material, scene, true);
+      // eslint-disable-next-line no-console
+      console.log("[engraving] brand CSG result:", engraved.getTotalVertices(), "verts");
       if (engraved.getTotalVertices() === 0) {
         // eslint-disable-next-line no-console
-        console.warn("[engraving] brand CSG produced empty mesh — keeping original host");
+        console.warn("[engraving] brand CSG produced empty mesh — falling back to raised");
         engraved.dispose();
       } else {
         engraved.enableEdgesRendering(0.95);
@@ -279,20 +309,23 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
         if (host === terrainMesh) {
           newTerrain = engraved;
         } else {
-          // Replace newPlinth (or plinthMesh) with the brand-engraved one.
           newPlinth?.dispose();
           newPlinth = engraved;
         }
+        csgOk = true;
       }
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn("[engraving] brand CSG failed", err);
-    } finally {
+      console.warn("[engraving] brand CSG failed — falling back to raised", err);
+    }
+    if (csgOk) {
       for (const n of brandNegatives) n.dispose();
+    } else {
+      for (const n of brandNegatives) raisedFallback.push(n);
     }
   }
 
-  return { newPlinth, newTerrain };
+  return { newPlinth, newTerrain, raisedFallback };
 }
 
 const MM_PER_INCH = 25.4;
@@ -317,6 +350,7 @@ export default function ModelViewer({
   const terrainRef = useRef<Mesh | null>(null);
   const plinthRef = useRef<Mesh | null>(null);
   const contoursRef = useRef<Mesh | null>(null);
+  const engravingFallbackRef = useRef<Mesh[]>([]);
   const terrainMatRef = useRef<StandardMaterial | null>(null);
   const plinthMatRef = useRef<StandardMaterial | null>(null);
   const lightRef = useRef<DirectionalLight | null>(null);
@@ -399,6 +433,7 @@ export default function ModelViewer({
       terrainRef.current = null;
       plinthRef.current = null;
       contoursRef.current = null;
+      engravingFallbackRef.current = [];
       lightRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -421,6 +456,8 @@ export default function ModelViewer({
     // engravings don't get wiped by applyToMesh on the next rebuild.
     terrainRef.current?.dispose();
     plinthRef.current?.dispose();
+    for (const m of engravingFallbackRef.current) m.dispose();
+    engravingFallbackRef.current = [];
 
     const meshSpec = {
       bbox,
@@ -549,9 +586,13 @@ export default function ModelViewer({
     if (doEngrave) {
       (async () => {
         try {
+          // eslint-disable-next-line no-console
+          console.log("[engraving] loading font...");
           const font = await loadFont();
           if (cancelled) return;
-          const { newPlinth, newTerrain } = await applyEngravings({
+          // eslint-disable-next-line no-console
+          console.log("[engraving] font loaded; building meshes", { engraveLabel, engraveBrand });
+          const { newPlinth, newTerrain, raisedFallback } = await applyEngravings({
             scene,
             font,
             plinthMesh: plinthRef.current,
@@ -569,22 +610,25 @@ export default function ModelViewer({
           if (cancelled) {
             newPlinth?.dispose();
             newTerrain?.dispose();
+            for (const m of raisedFallback) m.dispose();
             return;
           }
-          // Replace plinth ref if we got an engraved version.
           if (newPlinth) {
             plinthRef.current?.dispose();
             plinthRef.current = newPlinth;
           }
-          // Replace terrain ref if the brand was engraved on the
-          // terrain (no plinth case). The new mesh inherits the
-          // material; we need to preserve the position offset.
           if (newTerrain) {
             const oldY = terrain.position.y;
             newTerrain.position.y = oldY;
             terrainRef.current = newTerrain;
             terrain.dispose();
           }
+          // Stash any fallback (raised-visible) engraving meshes so
+          // they get cleaned up on the next rebuild and included in
+          // the STL export.
+          engravingFallbackRef.current = raisedFallback;
+          // eslint-disable-next-line no-console
+          console.log("[engraving] done; plinth replaced:", !!newPlinth, "terrain replaced:", !!newTerrain, "fallback meshes:", raisedFallback.length);
         } catch (err) {
           // eslint-disable-next-line no-console
           console.error("[engraving] failed", err);
@@ -666,6 +710,13 @@ export default function ModelViewer({
           clones.push(plinthClone);
         }
       }
+      for (const f of engravingFallbackRef.current) {
+        const fc = f.clone(`export-${f.name}`, null, true);
+        if (fc) {
+          fc.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
+          clones.push(fc);
+        }
+      }
       if (!clones.length) return;
       const filename = (label ? slug(label) : "ski-model") + ".stl";
       STLExport.CreateSTL(clones, true, filename, true, true, false);
@@ -674,9 +725,29 @@ export default function ModelViewer({
     }
 
     exportMesh.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
+    // Include any raised-fallback engraving meshes too. They aren't
+    // CSG-merged with the host (CSG didn't succeed), but slicers will
+    // typically treat the file as the union of all shells.
+    const fallbacks = engravingFallbackRef.current;
+    const fallbackClones: Mesh[] = [];
+    for (const f of fallbacks) {
+      const fc = f.clone(`export-${f.name}`, null, true);
+      if (fc) {
+        fc.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
+        fallbackClones.push(fc);
+      }
+    }
     const filename = (label ? slug(label) : "ski-model") + ".stl";
-    STLExport.CreateSTL([exportMesh], true, filename, true, true, false);
+    STLExport.CreateSTL(
+      [exportMesh, ...fallbackClones],
+      true,
+      filename,
+      true,
+      true,
+      false,
+    );
     exportMesh.dispose();
+    for (const fc of fallbackClones) fc.dispose();
   }, [label]);
 
   return (
