@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" role="img" aria-label="Hero screenshot placeholder">
+  <rect width="1200" height="600" fill="#0f172a"/>
+  <rect x="2" y="2" width="1196" height="596" fill="none" stroke="#334155" stroke-width="2" stroke-dasharray="8 6"/>
+  <g font-family="ui-monospace, Menlo, monospace" fill="#cbd5e1" text-anchor="middle">
+    <text x="600" y="290" font-size="42" font-weight="600">hero.png</text>
+    <text x="600" y="335" font-size="20" fill="#94a3b8">replace with a real screenshot (1200×600)</text>
+    <text x="600" y="365" font-size="16" fill="#64748b">map + 3D viewer side-by-side, ideally a recognizable mountain</text>
+  </g>
+</svg>

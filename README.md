@@ -4,32 +4,63 @@ A web-based PWA (Next.js, deployed on Vercel) that generates 3D-printable
 topographic models of ski mountains. Type a mountain, frame a bounding
 box, get a watertight `.stl` you can hand to your slicer.
 
-> **Status: Phase 3 / 3 — feature-complete.** Map picker, server-side
-> elevation pipeline (AWS terrarium + USGS 3DEP), Babylon viewer with
-> hillshade and contours, STL export in millimeters, share-by-URL,
-> installable PWA.
+![Hero — map picker beside the 3D viewer](docs/images/hero.svg)
+
+> **Status: feature-complete.** Map picker, server-side elevation pipeline
+> (AWS terrarium + USGS 3DEP), Babylon viewer with hillshade and
+> contours, multiple footprint shapes, optional engraved plinth + compass
+> + brand mark, STL export in millimeters, share-by-URL, installable PWA.
 
 ## Features
 
 - **Pick any mountain on Earth.** Search via OpenStreetMap's Nominatim,
   refine with a draggable / resizable bounding box on a MapTiler outdoor
   basemap. No Mapbox token needed.
+
+  ![Map picker with draggable bbox](docs/images/map-picker.svg)
+
 - **Open elevation data, no API keys.**
   - AWS Open Data **terrain tiles** (terrarium PNG encoding) — global,
     blended from SRTM / NED / ETOPO / GMTED, 30 m where the source
     permits.
   - **USGS 3DEP** auto-selected when the bbox is fully inside the US —
     typically 10 m, sometimes 1 m.
-- **Watertight mesh.** Top surface + four side walls + bottom face, all
-  oriented with consistent outward normals. Safe for any 3D-printing
-  slicer.
+- **Pick a footprint shape.** Rectangle, circle, or hexagon — the
+  non-rectangular shapes are inscribed in the bbox, with the canvas
+  aspect locked so the inscribed figure fills the frame. Circle and
+  hexagon can be rotated; drag a corner handle to spin.
+
+  ![Shape options: rectangle / circle / hexagon](docs/images/shapes.svg)
+
+- **Watertight mesh, CSG-engraved.** Top surface + side walls + bottom
+  face, all oriented with consistent outward normals — safe for any
+  slicer. Engravings (label, compass, brand) are cut with a real CSG
+  pass via Manifold, so the result stays watertight after subtraction.
+- **Optional plinth + engravings.**
+  - *Label + compass:* a beveled plinth wraps the model and the place
+    name + a north-pointing arrow are inlaid into the south rim, tilted
+    35° so they face up on a desk.
+  - *Brand on bottom:* `craftedcarving.com` engraved into the bottom
+    face. Independent toggle.
+
+  ![Inlaid plinth label + compass and brand on bottom](docs/images/engravings.svg)
+
+- **Adjustable mesh density.** Normal (256), High (512), or a Custom
+  slider up to 1024. File size scales ~N²; the UI warns past 512.
 - **3D preview** (Babylon.js) with orbit camera, hypsometric coloring
   (forest → scrub → rock → snow), sun-angle hillshade, and toggleable
   marching-squares contour lines.
+
+  ![Babylon viewer with hillshade + contours](docs/images/viewer.svg)
+
 - **STL export** in millimeters — pop it into Cura / PrusaSlicer / Bambu
   Studio and it'll already be the right physical size.
-- **Share-by-URL.** Every change to the bbox / size / exaggeration is
-  mirrored to the URL, so a deep link reopens the same model.
+
+  ![Exported STL loaded in a slicer](docs/images/slicer.svg)
+
+- **Share-by-URL.** Every change to the bbox / shape / rotation / size /
+  density / engraving toggles / exaggeration is mirrored to the URL, so
+  a deep link reopens the same model.
 - **Installable PWA.** Manifest + service worker (Serwist). App shell and
   static assets cache; map tiles cached opportunistically.
 
@@ -82,11 +113,18 @@ package — single round trip, no tile stitching.
 
 ## How the mesh is built
 
-Imagine the height grid as a tablecloth draped over a square table.
-Phase 2 rendered just the cloth. Phase 3 also sews the cloth to the table
-edges (four side walls) and adds the table top (a single flat bottom
-quad). The result is *watertight* — every triangle edge is shared by
-exactly two triangles, normals point outward, the volume is well-defined.
+Imagine the height grid as a tablecloth draped over a square table. The
+mesh builder sews the cloth to the table edges (side walls) and adds the
+table top (a single flat bottom quad). The result is *watertight* —
+every triangle edge is shared by exactly two triangles, normals point
+outward, the volume is well-defined.
+
+For non-rectangular shapes the grid is masked to the inscribed circle or
+hexagon and the side walls follow the shape's perimeter (with optional
+rotation). Engravings — the plinth label, the compass arrow, and the
+brand mark — are cut with a real CSG difference via Manifold against
+extruded glyph / arrow geometry, so the model stays watertight even
+after the subtraction.
 
 Scene units are inches. Vertical scale is
 `elevation_m × (print_width_in / bbox_width_m) × verticalExaggeration`,
@@ -100,8 +138,22 @@ opens at life-size in any slicer that defaults to millimeters.
 ## URL state
 
 ```
-/?b=W,S,E,N&s=WxH&t=baseInches&v=exag&label=Name
+/?b=W,S,E,N&sh=shape&r=rot&s=WxH&lk=1&g=grid&el=1&eb=0&t=baseInches&v=exag&label=Name
 ```
+
+| Key     | Meaning                                                |
+| ------- | ------------------------------------------------------ |
+| `b`     | bbox: `west,south,east,north`                          |
+| `sh`    | `rectangle` \| `circle` \| `hexagon`                   |
+| `r`     | rotation in degrees (omitted when 0)                   |
+| `s`     | print canvas size: `WxH` in inches                     |
+| `lk`    | `1` if aspect is locked (omitted otherwise)            |
+| `g`     | grid size (omitted at the default 256)                 |
+| `el`    | `1` to engrave the plinth label + compass              |
+| `eb`    | `0` to disable the bottom brand engraving (on by default) |
+| `t`     | base thickness, inches                                 |
+| `v`     | vertical exaggeration                                  |
+| `label` | display name (URL-encoded)                             |
 
 Example:
 
@@ -123,10 +175,14 @@ components/
   MapPicker.tsx            MapLibre + draggable bbox
   ModelViewer.tsx          Babylon scene + toolbar (sun, contours, STL)
   SearchBar.tsx            Nominatim geocoding
+  ShapeControls.tsx        Rectangle / circle / hexagon selector
   SizeControls.tsx         Print-size + exaggeration inputs
+  DensityControls.tsx      Mesh-density preset + custom slider
+  EngravingControls.tsx    Label/compass + brand toggles
   RegisterSW.tsx           Service-worker registration
 lib/
   bbox.ts                  Bbox math (small-angle approx)
+  shape.ts                 Shape geometry + point-in-shape tests
   elevation/
     terrarium.ts           Tile math + PNG decoding (server)
     usgs.ts                3DEP exportImage + GeoTIFF parsing (server)
@@ -134,11 +190,17 @@ lib/
   mesh/
     watertight.ts          Build closed VertexData from height grid
     contours.ts            Marching squares contour lines
+    plinth.ts              Beveled plinth around the model
+    compass.ts             North-arrow indicator geometry
+    text.ts                Glyph extrusion for engraved text
   types.ts                 Shared geometry types
-  url-state.ts             Encode/decode bbox+size to search params
+  url-state.ts             Encode/decode model spec to search params
 public/
   manifest.json
   icon.svg
+  fonts/
+docs/
+  images/                  Screenshots / placeholder art for this README
 ```
 
 ## License
