@@ -1,7 +1,29 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx tsc *)"
+      "Bash(git commit -m ':*)",
+      "Bash(grep:*)",
+      "Bash(npm info:*)",
+      "Bash(curl -s 'https://ducanh-next-pwa.vercel.app/docs/next-pwa/configuring')",
+      "WebFetch(domain:ducanh-next-pwa.vercel.app)",
+      "Bash(curl -sL https://serwist.pages.dev/docs/next/configuring)",
+      "WebFetch(domain:serwist.pages.dev)",
+      "Bash(npm audit:*)",
+      "Bash(npm test:*)",
+      "Bash(npm ls:*)",
+      "Bash(git push:*)",
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(node_modules/.bin/next build:*)",
+      "Bash(git commit:*)",
+      "Bash(grep '\"\"version\"\"' /Users/benkahan/Documents/Code/reson8/node_modules/zod/package.json)",
+      "Bash(node -e \"const z = require\\(''zod''\\); console.log\\(typeof z.object\\)\")",
+      "Bash(node -e \"import\\(''zod''\\).then\\(z => console.log\\(typeof z.default?.object || typeof z.object\\)\\)\")",
+      "Bash(gh run:*)",
+      "Bash(git fetch:*)",
+      "Bash(node:*)",
+      "Bash(python3:*)",
+      "Bash(coderabbit review *)",
+      "Bash(npm view *)"
     ]
   }
 }
