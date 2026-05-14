@@ -58,6 +58,12 @@ box, get a watertight `.stl` you can hand to your slicer.
 
   ![Exported STL loaded in a slicer](docs/images/slicer.svg)
 
+- **STEP export** for CAD. Unlike STL (triangle soup), STEP is a true
+  B-rep solid (AP203 / CONFIG_CONTROL_DESIGN): every triangle becomes an
+  `ADVANCED_FACE`, vertices and edges are deduped, and the whole model
+  is wrapped as a single `MANIFOLD_SOLID_BREP`. Fusion / SolidWorks /
+  FreeCAD open it as one selectable object. Units are declared as mm.
+
 - **Share-by-URL.** Every change to the bbox / shape / rotation / size /
   density / engraving toggles / exaggeration is mirrored to the URL, so
   a deep link reopens the same model.
@@ -67,13 +73,18 @@ box, get a watertight `.stl` you can hand to your slicer.
 ## Run locally
 
 ```bash
-cp .env.local.example .env.local
-# add NEXT_PUBLIC_MAPTILER_KEY (free at https://www.maptiler.com/cloud/)
+# Create .env.local with your MapTiler key (free at https://www.maptiler.com/cloud/)
+echo 'NEXT_PUBLIC_MAPTILER_KEY=your_key_here' > .env.local
 npm install
 npm run dev
 ```
 
 Open <http://localhost:3000>.
+
+> `npm run dev` and `npm run build` pass `--webpack` because Next 16
+> defaults to Turbopack and the current `@serwist/next` plugin still
+> injects a Webpack config. A Turbopack-compatible Serwist migration is
+> a separate piece of work.
 
 ## Deploy
 
@@ -135,6 +146,13 @@ For STL export we clone the mesh, scale by 25.4 (mm/in), and let the
 serializer bake the transform into vertex positions. The downloaded file
 opens at life-size in any slicer that defaults to millimeters.
 
+For STEP export (`lib/mesh/step-export.ts`) we walk the same final mesh,
+dedupe vertices by exact position, dedupe undirected edges, emit one
+`ADVANCED_FACE` per triangle, and wrap everything in a single
+`MANIFOLD_SOLID_BREP`. When a plinth is present the terrain + plinth are
+CSG-unioned first (same path as STL); raised-fallback engraving meshes
+are fused in by position dedup so the export stays a single solid.
+
 ## URL state
 
 ```
@@ -169,6 +187,7 @@ The page reads this on mount and rebuilds the picker / model spec.
 app/
   api/elevation/route.ts   POST handler (dispatch terrarium / USGS)
   layout.tsx               Root + RegisterSW + metadata
+  not-found.tsx            404 page (required by Next 16 at build time)
   page.tsx                 Map ↔ viewer state machine
   sw.ts                    Service worker entry (built by Serwist)
 components/
@@ -193,6 +212,7 @@ lib/
     plinth.ts              Beveled plinth around the model
     compass.ts             North-arrow indicator geometry
     text.ts                Glyph extrusion for engraved text
+    step-export.ts         AP203 STEP (B-rep solid) serializer
   types.ts                 Shared geometry types
   url-state.ts             Encode/decode model spec to search params
 public/

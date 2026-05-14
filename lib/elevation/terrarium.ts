@@ -80,6 +80,7 @@ interface DecodedTile {
   rgba: Buffer;
 }
 
+const TILE_CACHE_MAX = 256;
 const tileCache = new Map<string, Promise<DecodedTile>>();
 
 async function fetchTile(z: number, x: number, y: number): Promise<DecodedTile> {
@@ -88,32 +89,40 @@ async function fetchTile(z: number, x: number, y: number): Promise<DecodedTile> 
   if (cached) return cached;
 
   const promise = (async () => {
-    const url = TILE_URL(z, x, y);
-    const res = await fetch(url, {
-      // Vercel's fetch supports HTTP caching. Tiles are immutable, so cache
-      // aggressively at the edge.
-      cache: "force-cache",
-      next: { revalidate: 60 * 60 * 24 * 30 }, // 30 days
-    });
-    if (!res.ok) {
-      throw new Error(`terrarium ${key}: ${res.status} ${res.statusText}`);
+    try {
+      const url = TILE_URL(z, x, y);
+      const res = await fetch(url, {
+        // Vercel's fetch supports HTTP caching. Tiles are immutable, so cache
+        // aggressively at the edge.
+        cache: "force-cache",
+        next: { revalidate: 60 * 60 * 24 * 30 }, // 30 days
+      });
+      if (!res.ok) {
+        throw new Error(`terrarium ${key}: ${res.status} ${res.statusText}`);
+      }
+      const buf = Buffer.from(await res.arrayBuffer());
+      const png = PNG.sync.read(buf);
+      return {
+        x0: x * TILE_SIZE,
+        y0: y * TILE_SIZE,
+        width: png.width,
+        height: png.height,
+        rgba: png.data,
+      };
+    } catch (err) {
+      // Don't cache the failure — otherwise every future request for this tile
+      // returns the cached rejection for the lifetime of the function instance.
+      tileCache.delete(key);
+      throw err;
     }
-    const buf = Buffer.from(await res.arrayBuffer());
-    const png = PNG.sync.read(buf);
-    return {
-      x0: x * TILE_SIZE,
-      y0: y * TILE_SIZE,
-      width: png.width,
-      height: png.height,
-      rgba: png.data,
-    };
   })();
-  tileCache.set(key, promise);
-  // Cap cache to avoid runaway memory across many requests on a warm function.
-  if (tileCache.size > 256) {
+  // Trim before insert so the map stays at or below the cap.
+  while (tileCache.size >= TILE_CACHE_MAX) {
     const firstKey = tileCache.keys().next().value;
-    if (firstKey) tileCache.delete(firstKey);
+    if (!firstKey) break;
+    tileCache.delete(firstKey);
   }
+  tileCache.set(key, promise);
   return promise;
 }
 

@@ -161,22 +161,24 @@ export default function Home() {
       verticalExaggeration: parsed.verticalExaggeration ?? 2,
       aspectLocked: locked,
     });
-    if (parsed.gridSize !== undefined) {
-      setGridSize(
-        Math.max(MIN_GRID_SIZE, Math.min(MAX_GRID_SIZE, parsed.gridSize)),
+    const nextGridSize = parsed.gridSize !== undefined
+      ? Math.max(MIN_GRID_SIZE, Math.min(MAX_GRID_SIZE, parsed.gridSize))
+      : DEFAULT_GRID_SIZE;
+    setGridSize(nextGridSize);
+    setEngraveLabel(parsed.engraveLabel ?? false);
+    setEngraveBrand(parsed.engraveBrand ?? true);
+    setLabel(parsed.label ?? "Jay Peak");
+    const nextBbox = parsed.bbox
+      ?? bboxForShape(
+        DEFAULT_CENTER,
+        sh,
+        w,
+        h,
+        rot,
+        DEFAULT_SHAPE_WIDTH_METERS / w,
       );
-    }
-    if (parsed.engraveLabel !== undefined) setEngraveLabel(parsed.engraveLabel);
-    if (parsed.engraveBrand !== undefined) setEngraveBrand(parsed.engraveBrand);
-    if (parsed.label) setLabel(parsed.label);
-    if (parsed.bbox) {
-      setBbox(parsed.bbox);
-      setFlyTo(bboxCenter(parsed.bbox));
-    } else {
-      // Default: 5 km shape at the default center.
-      const metersPerInch = DEFAULT_SHAPE_WIDTH_METERS / w;
-      setBbox(bboxForShape(DEFAULT_CENTER, sh, w, h, rot, metersPerInch));
-    }
+    setBbox(nextBbox);
+    setFlyTo(parsed.bbox ? bboxCenter(parsed.bbox) : null);
   }, []);
 
   // --- Mirror state to URL whenever it stabilizes ---

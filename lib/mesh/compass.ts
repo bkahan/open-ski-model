@@ -65,7 +65,6 @@ export function buildCompassArrow(opts: CompassMeshOptions): Mesh | null {
     );
     return m;
   } catch (err) {
-    // eslint-disable-next-line no-console
     console.warn(`[compass] failed: ${(err as Error).message}`);
     return null;
   }

@@ -25,11 +25,12 @@ export default function SearchBar({ onSelect }: Props) {
   const [open, setOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
+  // Below the minimum query length we just don't render any results — no
+  // need to mirror that state in React (avoids setState-in-effect).
+  const visibleResults = query.trim().length < 3 ? [] : results;
+
   useEffect(() => {
-    if (query.trim().length < 3) {
-      setResults([]);
-      return;
-    }
+    if (query.trim().length < 3) return;
 
     const timer = setTimeout(async () => {
       abortRef.current?.abort();
@@ -70,7 +71,7 @@ export default function SearchBar({ onSelect }: Props) {
         placeholder="Search a ski mountain or place&hellip;"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        onFocus={() => results.length && setOpen(true)}
+        onFocus={() => visibleResults.length && setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
       />
       {loading && (
@@ -78,9 +79,9 @@ export default function SearchBar({ onSelect }: Props) {
           searching&hellip;
         </span>
       )}
-      {open && results.length > 0 && (
+      {open && visibleResults.length > 0 && (
         <ul className="absolute z-20 mt-1 w-full max-h-72 overflow-auto rounded-md border border-slate-700 bg-slate-900 shadow-xl">
-          {results.map((r) => (
+          {visibleResults.map((r) => (
             <li key={r.placeId}>
               <button
                 type="button"

@@ -152,76 +152,40 @@ export default function MapPicker({
   const rotHandleRef = useRef<SVGCircleElement | null>(null);
   const rotLineRef = useRef<SVGLineElement | null>(null);
 
-  // Mutable refs so listeners always see fresh values.
+  // Latest-value mirrors so listeners (bound once on mount) see fresh
+  // props/callbacks without needing to rebind. Synced post-render below.
   const bboxRef = useRef<Bbox | null>(bbox);
-  bboxRef.current = bbox;
   const shapeRef = useRef<Shape>(shape);
-  shapeRef.current = shape;
   const widthRef = useRef(widthInches);
-  widthRef.current = widthInches;
   const heightRef = useRef(heightInches);
-  heightRef.current = heightInches;
   const rotationRef = useRef(rotation);
-  rotationRef.current = rotation;
   const onCenterRef = useRef(onCenterChange);
-  onCenterRef.current = onCenterChange;
   const onResizeRef = useRef(onResize);
-  onResizeRef.current = onResize;
   const onRotationRef = useRef(onRotationChange);
-  onRotationRef.current = onRotationChange;
 
-  // --- 1. Initialize the map once ---
   useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
+    bboxRef.current = bbox;
+    shapeRef.current = shape;
+    widthRef.current = widthInches;
+    heightRef.current = heightInches;
+    rotationRef.current = rotation;
+    onCenterRef.current = onCenterChange;
+    onResizeRef.current = onResize;
+    onRotationRef.current = onRotationChange;
+  });
 
-    const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: MAPTILER_STYLE_URL ?? OPENTOPO_STYLE,
-      center: [-72.5, 44.93],
-      zoom: 11,
-      attributionControl: false,
-    });
-    map.on("error", (e) => {
-      const err = (e as { error?: { message?: string } }).error;
-      // eslint-disable-next-line no-console
-      console.warn("[map error]", err?.message ?? e);
-    });
-    setTimeout(() => map.resize(), 100);
-    map.addControl(
-      new maplibregl.AttributionControl({ compact: true }),
-      "bottom-right",
-    );
-    map.addControl(
-      new maplibregl.NavigationControl({ showCompass: false }),
-      "top-right",
-    );
-    mapRef.current = map;
-
-    const repaint = () => paintOverlay();
-    map.on("move", repaint);
-    map.on("resize", repaint);
-    map.once("load", repaint);
-
-    return () => {
-      map.off("move", repaint);
-      map.off("resize", repaint);
-      map.remove();
-      mapRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Compute the SHAPE's metersPerInch from the current bbox AABB. The
-  // bbox is the AABB of the rotated shape; meters per inch is the AABB
-  // width in meters divided by the AABB width in inches.
+  // Compute the SHAPE's metersPerInch from the current bbox AABB. Kept
+  // around for potential future use (e.g. live readout of model scale).
   const metersPerInch = useMemo(() => {
     if (!bbox) return 0;
     const halfWIn = shapeAABBHalf(shape, widthInches, heightInches, rotation)[0];
     if (halfWIn === 0) return 0;
     return bboxWidthMeters(bbox) / (halfWIn * 2);
   }, [bbox, shape, widthInches, heightInches, rotation]);
+  void metersPerInch;
 
-  // --- 2. Paint shape outline + handles in screen pixels ---
+  // --- Paint shape outline + handles in screen pixels ---
+  // Reads everything from refs so identity stays stable across renders.
   const paintOverlay = useCallback(() => {
     const map = mapRef.current;
     const svg = svgRef.current;
@@ -355,18 +319,60 @@ export default function MapPicker({
     }
   }, []);
 
+  // Repaint whenever the values paintOverlay reads change. paintOverlay
+  // itself is stable so listing it in deps is a no-op.
   useEffect(() => {
     paintOverlay();
   }, [bbox, shape, widthInches, heightInches, rotation, paintOverlay]);
 
-  // --- 3. Fly to new search result ---
+  // --- 1. Initialize the map once ---
+  useEffect(() => {
+    if (!containerRef.current || mapRef.current) return;
+
+    const map = new maplibregl.Map({
+      container: containerRef.current,
+      style: MAPTILER_STYLE_URL ?? OPENTOPO_STYLE,
+      center: [-72.5, 44.93],
+      zoom: 11,
+      attributionControl: false,
+    });
+    map.on("error", (e) => {
+      const err = (e as { error?: { message?: string } }).error;
+      console.warn("[map error]", err?.message ?? e);
+    });
+    const resizeTimer = setTimeout(() => map.resize(), 100);
+    map.addControl(
+      new maplibregl.AttributionControl({ compact: true }),
+      "bottom-right",
+    );
+    map.addControl(
+      new maplibregl.NavigationControl({ showCompass: false }),
+      "top-right",
+    );
+    mapRef.current = map;
+
+    const repaint = () => paintOverlay();
+    map.on("move", repaint);
+    map.on("resize", repaint);
+    map.once("load", repaint);
+
+    return () => {
+      clearTimeout(resizeTimer);
+      map.off("move", repaint);
+      map.off("resize", repaint);
+      map.remove();
+      mapRef.current = null;
+    };
+  }, [paintOverlay]);
+
+  // --- 2. Fly to new search result ---
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !flyTo) return;
     map.flyTo({ center: flyTo, zoom: Math.max(map.getZoom(), 12), duration: 800 });
   }, [flyTo]);
 
-  // --- 4. Drag-to-move: dragging the shape's interior ---
+  // --- 3. Drag-to-move: dragging the shape's interior ---
   useEffect(() => {
     const path = shapePathRef.current;
     const map = mapRef.current;
@@ -442,7 +448,7 @@ export default function MapPicker({
     };
   }, []);
 
-  // --- 5. Corner-handle resize (rectangle) ---
+  // --- 4. Corner-handle resize (rectangle) ---
   // The OPPOSITE corner stays anchored in geographic space. We:
   //   1. Read the anchor's current geographic position.
   //   2. Read the cursor's geographic position (the new dragged corner).
@@ -528,7 +534,7 @@ export default function MapPicker({
     };
   }, []);
 
-  // --- 6. Perimeter-handle resize (circle / hexagon) ---
+  // --- 5. Perimeter-handle resize (circle / hexagon) ---
   // The handle sits at the east point of the un-rotated shape. Dragging
   // changes the radius / half-width; we keep the shape centered.
   useEffect(() => {
@@ -588,7 +594,7 @@ export default function MapPicker({
     };
   }, []);
 
-  // --- 7. Rotation handle ---
+  // --- 6. Rotation handle ---
   // Compute the angle from the shape's center to the cursor; that's the
   // new rotation. We measure with respect to the canonical "top
   // midpoint" direction (which is (0, -1) in shape local — straight up
@@ -643,10 +649,6 @@ export default function MapPicker({
       el.removeEventListener("pointercancel", onUp);
     };
   }, []);
-
-  // Suppress unused-warning for metersPerInch: kept around for potential
-  // future use, e.g. live-readout of model scale.
-  void metersPerInch;
 
   return (
     <div className="relative w-full h-full">

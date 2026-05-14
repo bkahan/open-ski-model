@@ -229,7 +229,6 @@ export function buildTextMesh(opts: TextMeshOptions): Mesh | null {
     } catch (err) {
       // Earcut occasionally fails on degenerate paths (overlapping verts,
       // self-intersecting curves). Skip the bad group.
-      // eslint-disable-next-line no-console
       console.warn(`[text] glyph group ${gi} failed: ${(err as Error).message}`);
     }
   }

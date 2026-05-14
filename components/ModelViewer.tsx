@@ -165,11 +165,8 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
       labelMesh.position = worldPos;
       labelMesh.rotationQuaternion = bevelEngravingRotation;
       labelMesh.material = plinthMesh.material;
-      // eslint-disable-next-line no-console
-      console.log("[engraving] label mesh:", labelMesh.getTotalVertices(), "verts at", worldPos);
       plinthNegatives.push(labelMesh);
     } else {
-      // eslint-disable-next-line no-console
       console.warn("[engraving] label mesh was null (buildTextMesh failed)");
     }
   }
@@ -189,11 +186,8 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
       compassMesh.position = worldPos;
       compassMesh.rotationQuaternion = bevelEngravingRotation;
       compassMesh.material = plinthMesh.material;
-      // eslint-disable-next-line no-console
-      console.log("[engraving] compass mesh:", compassMesh.getTotalVertices(), "verts at", worldPos);
       plinthNegatives.push(compassMesh);
     } else {
-      // eslint-disable-next-line no-console
       console.warn("[engraving] compass mesh was null");
     }
   }
@@ -215,14 +209,11 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
       const qXFlip = Quaternion.RotationAxis(new Vector3(1, 0, 0), Math.PI);
       brandMesh.rotationQuaternion = qShape.multiply(qXFlip);
       brandMesh.position.y = -0.005;
-      // eslint-disable-next-line no-console
-      console.log("[engraving] brand mesh:", brandMesh.getTotalVertices(), "verts");
       // Use whichever material we'll engrave into so the visible
       // fallback mesh matches its host.
       brandMesh.material = (plinthMesh ?? terrainMesh).material;
       brandNegatives.push(brandMesh);
     } else {
-      // eslint-disable-next-line no-console
       console.warn("[engraving] brand mesh was null (buildTextMesh failed)");
     }
   }
@@ -240,8 +231,6 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
         n.bakeCurrentTransformIntoVertices();
       }
       plinthMesh.computeWorldMatrix(true);
-      // eslint-disable-next-line no-console
-      console.log("[engraving] plinth CSG: subtracting", plinthNegatives.length, "from", plinthMesh.getTotalVertices(), "verts");
       let plinthCSG = CSG.FromMesh(plinthMesh);
       for (const n of plinthNegatives) {
         plinthCSG = plinthCSG.subtract(CSG.FromMesh(n));
@@ -252,10 +241,7 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
         scene,
         true,
       );
-      // eslint-disable-next-line no-console
-      console.log("[engraving] plinth CSG result:", engraved.getTotalVertices(), "verts");
       if (engraved.getTotalVertices() === 0) {
-        // eslint-disable-next-line no-console
         console.warn("[engraving] plinth CSG produced empty mesh — falling back to raised");
         engraved.dispose();
       } else {
@@ -266,7 +252,6 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
         csgOk = true;
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.warn("[engraving] plinth CSG failed — falling back to raised", err);
     }
     if (csgOk) {
@@ -291,17 +276,12 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
         n.bakeCurrentTransformIntoVertices();
       }
       host.computeWorldMatrix(true);
-      // eslint-disable-next-line no-console
-      console.log("[engraving] brand CSG: host", host.name, "with", host.getTotalVertices(), "verts");
       let hostCSG = CSG.FromMesh(host);
       for (const n of brandNegatives) {
         hostCSG = hostCSG.subtract(CSG.FromMesh(n));
       }
       const engraved = hostCSG.toMesh(host.name + "-engraved", host.material, scene, true);
-      // eslint-disable-next-line no-console
-      console.log("[engraving] brand CSG result:", engraved.getTotalVertices(), "verts");
       if (engraved.getTotalVertices() === 0) {
-        // eslint-disable-next-line no-console
         console.warn("[engraving] brand CSG produced empty mesh — falling back to raised");
         engraved.dispose();
       } else {
@@ -317,7 +297,6 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
         csgOk = true;
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.warn("[engraving] brand CSG failed — falling back to raised", err);
     }
     if (csgOk) {
@@ -588,12 +567,8 @@ export default function ModelViewer({
     if (doEngrave) {
       (async () => {
         try {
-          // eslint-disable-next-line no-console
-          console.log("[engraving] loading font...");
           const font = await loadFont();
           if (cancelled) return;
-          // eslint-disable-next-line no-console
-          console.log("[engraving] font loaded; building meshes", { engraveLabel, engraveBrand });
           const { newPlinth, newTerrain, raisedFallback } = await applyEngravings({
             scene,
             font,
@@ -629,10 +604,7 @@ export default function ModelViewer({
           // they get cleaned up on the next rebuild and included in
           // the STL export.
           engravingFallbackRef.current = raisedFallback;
-          // eslint-disable-next-line no-console
-          console.log("[engraving] done; plinth replaced:", !!newPlinth, "terrain replaced:", !!newTerrain, "fallback meshes:", raisedFallback.length);
         } catch (err) {
-          // eslint-disable-next-line no-console
           console.error("[engraving] failed", err);
         }
       })();
@@ -691,7 +663,6 @@ export default function ModelViewer({
           true,
         );
       } catch (err) {
-        // eslint-disable-next-line no-console
         console.warn("[stl] union failed; falling back to multi-mesh export", err);
       }
     }
@@ -778,7 +749,6 @@ export default function ModelViewer({
         const u = CSG.FromMesh(terrain).union(CSG.FromMesh(plinth));
         unionMesh = u.toMesh("export-step", null, scene, true);
       } catch (err) {
-        // eslint-disable-next-line no-console
         console.warn("[step] CSG union failed; using separate meshes", err);
       }
     }
@@ -831,7 +801,6 @@ export default function ModelViewer({
         { name: stepName, unitScale: MM_PER_INCH },
       );
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error("[step] export failed", err);
       for (const m of meshes) m.dispose();
       return;
