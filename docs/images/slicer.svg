@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" role="img" aria-label="STL in slicer screenshot placeholder">
+  <rect width="800" height="400" fill="#0f172a"/>
+  <rect x="2" y="2" width="796" height="396" fill="none" stroke="#334155" stroke-width="2" stroke-dasharray="8 6"/>
+  <g font-family="ui-monospace, Menlo, monospace" fill="#cbd5e1" text-anchor="middle">
+    <text x="400" y="190" font-size="28" font-weight="600">slicer.png</text>
+    <text x="400" y="225" font-size="14" fill="#94a3b8">exported STL loaded in PrusaSlicer / Bambu Studio at real size</text>
+  </g>
+</svg>
