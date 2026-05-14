@@ -10,6 +10,9 @@ const withSerwist = withSerwistInit({
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Pin file-tracing to this project so Next 16 doesn't latch onto an
+  // unrelated package-lock.json in a parent directory.
+  outputFileTracingRoot: import.meta.dirname,
   experimental: {
     optimizePackageImports: ["maplibre-gl"],
   },
