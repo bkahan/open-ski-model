@@ -1,20 +1,20 @@
 // STEP (ISO 10303-21) exporter.
 //
-// Emits a faceted B-rep solid: each input triangle becomes a planar
-// ADVANCED_FACE bounded by a 3-edge loop. Adjacent triangles share
+// Emits faceted B-rep solids: each input mesh becomes its own
+// MANIFOLD_SOLID_BREP. Adjacent triangles within a mesh share
 // VERTEX_POINT and EDGE_CURVE entities (vertex deduplication by exact
-// XYZ position), so the resulting MANIFOLD_SOLID_BREP is a single
-// topologically watertight solid that CAD apps (Fusion 360, SolidWorks,
-// FreeCAD, etc.) open as one selectable object — unlike STL, which is
+// XYZ position) so each solid is a single selectable object in CAD
+// apps (Fusion 360, SolidWorks, FreeCAD, etc.) — unlike STL, which is
 // just a triangle soup with no topology.
 //
-// Tradeoffs:
-//   - The mesh stays tessellated (no NURBS surface fitting). For our
-//     terrain that's appropriate — there's no analytic surface to fit.
-//   - File size is larger than STL: ~10–30 entities per triangle, plus
-//     shared vertex / edge entities. A 130 K-triangle terrain produces
-//     roughly a 15–25 MB STEP file. That's normal for B-rep exports of
-//     dense meshes.
+// Why per-mesh, not one merged solid: STEP's MANIFOLD_SOLID_BREP is a
+// strict closed-manifold contract. Two watertight meshes that happen
+// to touch at a plane do NOT compose into a watertight whole when
+// concatenated — the shared region becomes internal duplicated faces.
+// And Babylon's CSG.union doesn't actually produce a watertight mesh
+// either (it leaves open edges at the join). So we keep each input
+// mesh as its own solid; CAD apps see them as separate bodies under
+// one product, which the user can stitch / merge if desired.
 //
 // Output: a Part-21 (ASCII) STEP file as a string. Conforms to AP203
 // (CONFIG_CONTROL_DESIGN), which is the most widely supported flavor.
@@ -32,191 +32,39 @@ export interface StepExportOptions {
 export interface StepMeshInput {
   positions: ArrayLike<number>;
   indices: ArrayLike<number>;
+  /** Optional label for this body (e.g., "terrain"). Becomes the MANIFOLD_SOLID_BREP name. */
+  name?: string;
 }
 
 /**
- * Convert a triangle mesh to a STEP file. Returns the file as a single
- * string. Triangles are deduplicated by vertex position so the result
- * is a single solid, not many disconnected faces.
+ * Convert one or more triangle meshes to a STEP file. Each input mesh
+ * becomes its own MANIFOLD_SOLID_BREP under a single PRODUCT. Pass a
+ * single object for one solid, or an array for a multi-body part.
  */
 export function exportToStep(
-  data: StepMeshInput,
+  data: StepMeshInput | StepMeshInput[],
   opts: StepExportOptions = {},
 ): string {
-  const name = (opts.name ?? "ski-model").replace(/'/g, "");
+  const productName = (opts.name ?? "ski-model").replace(/'/g, "");
   const unitScale = opts.unitScale ?? 25.4;
+  const inputs = Array.isArray(data) ? data : [data];
 
-  const positions = data.positions;
-  const indices = data.indices;
-  if (!positions || !indices) {
-    throw new Error("STEP input missing positions or indices");
-  }
-
-  // --- 1. Dedup vertices by exact position ---
-  // We use a string key with 6 decimal digits of precision. At our
-  // typical scale (inches → mm, model fits in a few hundred mm) this
-  // is well below the printer / CAD tolerance.
-  const vertexMap = new Map<string, number>();
-  const dedupedPositions: Array<[number, number, number]> = [];
-  const indexRemap = new Int32Array(positions.length / 3);
-  for (let i = 0; i < positions.length / 3; i++) {
-    const x = positions[i * 3] * unitScale;
-    const y = positions[i * 3 + 1] * unitScale;
-    const z = positions[i * 3 + 2] * unitScale;
-    const key = `${x.toFixed(6)},${y.toFixed(6)},${z.toFixed(6)}`;
-    let id = vertexMap.get(key);
-    if (id === undefined) {
-      id = dedupedPositions.length;
-      vertexMap.set(key, id);
-      dedupedPositions.push([x, y, z]);
-    }
-    indexRemap[i] = id;
-  }
-
-  // --- 2. Walk triangles; collect unique edges by canonical key ---
-  const triCount = indices.length / 3;
-  type RemappedTri = [number, number, number];
-  const tris: RemappedTri[] = [];
-  for (let t = 0; t < triCount; t++) {
-    const a = indexRemap[indices[t * 3]];
-    const b = indexRemap[indices[t * 3 + 1]];
-    const c = indexRemap[indices[t * 3 + 2]];
-    // Skip degenerate triangles (duplicate vertex after dedup, or
-    // collinear). These don't contribute to the boundary and would
-    // confuse downstream CAD readers.
-    if (a === b || b === c || a === c) continue;
-    tris.push([a, b, c]);
-  }
-
-  // --- 3. Build the STEP file ---
   const lines: string[] = [];
   let nextId = 1;
   const newId = () => nextId++;
 
-  // 3a. CARTESIAN_POINT + VERTEX_POINT per deduped vertex.
-  const cartesianPointId = new Int32Array(dedupedPositions.length);
-  const vertexPointId = new Int32Array(dedupedPositions.length);
-  for (let i = 0; i < dedupedPositions.length; i++) {
-    const [x, y, z] = dedupedPositions[i];
-    const cp = newId();
-    cartesianPointId[i] = cp;
-    lines.push(
-      `#${cp} = CARTESIAN_POINT('',(${stepNum(x)},${stepNum(y)},${stepNum(z)}));`,
-    );
-    const vp = newId();
-    vertexPointId[i] = vp;
-    lines.push(`#${vp} = VERTEX_POINT('',#${cp});`);
+  // Emit each input mesh as its own MANIFOLD_SOLID_BREP.
+  const bodyIds: number[] = [];
+  for (let bi = 0; bi < inputs.length; bi++) {
+    const bodyName = (inputs[bi].name ?? `${productName}-${bi + 1}`).replace(/'/g, "");
+    const id = emitBody(inputs[bi], bodyName, lines, newId, unitScale);
+    if (id !== null) bodyIds.push(id);
+  }
+  if (bodyIds.length === 0) {
+    throw new Error("STEP export: no valid meshes (all were empty or degenerate)");
   }
 
-  // 3b. EDGE_CURVE per unique undirected edge (emitted lazily).
-  // Key = "smallerVid_largerVid". The edge is parameterized from the
-  // smaller vertex id to the larger one; ORIENTED_EDGE consumers flip
-  // orientation when they walk it the other way.
-  const edgeCurveByKey = new Map<string, number>();
-  const getEdgeCurve = (
-    va: number,
-    vb: number,
-  ): { id: number; orientation: boolean } => {
-    const start = Math.min(va, vb);
-    const end = Math.max(va, vb);
-    const key = `${start}_${end}`;
-    let id = edgeCurveByKey.get(key);
-    if (id === undefined) {
-      const [sx, sy, sz] = dedupedPositions[start];
-      const [ex, ey, ez] = dedupedPositions[end];
-      const dx = ex - sx;
-      const dy = ey - sy;
-      const dz = ez - sz;
-      const len = Math.hypot(dx, dy, dz);
-      const dir = newId();
-      lines.push(
-        `#${dir} = DIRECTION('',(${stepNum(dx / len)},${stepNum(dy / len)},${stepNum(dz / len)}));`,
-      );
-      const vec = newId();
-      lines.push(`#${vec} = VECTOR('',#${dir},${stepNum(len)});`);
-      const line = newId();
-      lines.push(`#${line} = LINE('',#${cartesianPointId[start]},#${vec});`);
-      id = newId();
-      lines.push(
-        `#${id} = EDGE_CURVE('',#${vertexPointId[start]},#${vertexPointId[end]},#${line},.T.);`,
-      );
-      edgeCurveByKey.set(key, id);
-    }
-    return { id, orientation: va === start };
-  };
-
-  // 3c. ADVANCED_FACE per triangle.
-  const faceIds: number[] = [];
-  for (const [v0, v1, v2] of tris) {
-    const e01 = getEdgeCurve(v0, v1);
-    const e12 = getEdgeCurve(v1, v2);
-    const e20 = getEdgeCurve(v2, v0);
-
-    const oe01 = newId();
-    lines.push(
-      `#${oe01} = ORIENTED_EDGE('',*,*,#${e01.id},${e01.orientation ? ".T." : ".F."});`,
-    );
-    const oe12 = newId();
-    lines.push(
-      `#${oe12} = ORIENTED_EDGE('',*,*,#${e12.id},${e12.orientation ? ".T." : ".F."});`,
-    );
-    const oe20 = newId();
-    lines.push(
-      `#${oe20} = ORIENTED_EDGE('',*,*,#${e20.id},${e20.orientation ? ".T." : ".F."});`,
-    );
-
-    const loop = newId();
-    lines.push(`#${loop} = EDGE_LOOP('',(#${oe01},#${oe12},#${oe20}));`);
-    const bound = newId();
-    lines.push(`#${bound} = FACE_OUTER_BOUND('',#${loop},.T.);`);
-
-    // Plane: AXIS2_PLACEMENT_3D with origin = v0, axis = triangle
-    // normal, ref_dir = edge v0→v1.
-    const p0 = dedupedPositions[v0];
-    const p1 = dedupedPositions[v1];
-    const p2 = dedupedPositions[v2];
-    const ax = p1[0] - p0[0], ay = p1[1] - p0[1], az = p1[2] - p0[2];
-    const bx = p2[0] - p0[0], by = p2[1] - p0[1], bz = p2[2] - p0[2];
-    let nx = ay * bz - az * by;
-    let ny = az * bx - ax * bz;
-    let nz = ax * by - ay * bx;
-    let nlen = Math.hypot(nx, ny, nz);
-    if (nlen === 0) continue; // collinear; skip
-    nx /= nlen; ny /= nlen; nz /= nlen;
-    const alen = Math.hypot(ax, ay, az);
-    const rx = ax / alen, ry = ay / alen, rz = az / alen;
-
-    const normalDir = newId();
-    lines.push(
-      `#${normalDir} = DIRECTION('',(${stepNum(nx)},${stepNum(ny)},${stepNum(nz)}));`,
-    );
-    const refDir = newId();
-    lines.push(
-      `#${refDir} = DIRECTION('',(${stepNum(rx)},${stepNum(ry)},${stepNum(rz)}));`,
-    );
-    const axis = newId();
-    lines.push(
-      `#${axis} = AXIS2_PLACEMENT_3D('',#${cartesianPointId[v0]},#${normalDir},#${refDir});`,
-    );
-    const plane = newId();
-    lines.push(`#${plane} = PLANE('',#${axis});`);
-
-    const face = newId();
-    lines.push(
-      `#${face} = ADVANCED_FACE('',(#${bound}),#${plane},.T.);`,
-    );
-    faceIds.push(face);
-  }
-
-  // 3d. Shell + solid.
-  const shellId = newId();
-  lines.push(
-    `#${shellId} = CLOSED_SHELL('',(${faceIds.map((id) => `#${id}`).join(",")}));`,
-  );
-  const solidId = newId();
-  lines.push(`#${solidId} = MANIFOLD_SOLID_BREP('${name}',#${shellId});`);
-
-  // 3e. Coordinate system + product / context boilerplate. AP203 expects
+  // Coordinate system + product / context boilerplate. AP203 expects
   // this skeleton so any reader can resolve the shape's context.
   const worldOriginCP = newId();
   lines.push(`#${worldOriginCP} = CARTESIAN_POINT('',(0.,0.,0.));`);
@@ -251,17 +99,22 @@ export function exportToStep(
   );
 
   const shapeRep = newId();
+  const repItems = [
+    `#${worldAxis}`,
+    ...bodyIds.map((id) => `#${id}`),
+  ].join(",");
   lines.push(
-    `#${shapeRep} = ADVANCED_BREP_SHAPE_REPRESENTATION('${name}',(#${worldAxis},#${solidId}),#${geomContext});`,
+    `#${shapeRep} = ADVANCED_BREP_SHAPE_REPRESENTATION('${productName}',(${repItems}),#${geomContext});`,
   );
 
   const appContext = newId();
   lines.push(
     `#${appContext} = APPLICATION_CONTEXT('configuration controlled 3D designs of mechanical parts and assemblies');`,
   );
-  const appProtocol = newId();
+  // APPLICATION_PROTOCOL_DEFINITION — terminal entity, referenced by
+  // nothing in the graph but required to be present in the DATA section.
   lines.push(
-    `#${appProtocol} = APPLICATION_PROTOCOL_DEFINITION('international standard','config_control_design',1994,#${appContext});`,
+    `#${newId()} = APPLICATION_PROTOCOL_DEFINITION('international standard','config_control_design',1994,#${appContext});`,
   );
   const productContext = newId();
   lines.push(
@@ -269,7 +122,7 @@ export function exportToStep(
   );
   const product = newId();
   lines.push(
-    `#${product} = PRODUCT('${name}','${name}','',(#${productContext}));`,
+    `#${product} = PRODUCT('${productName}','${productName}','',(#${productContext}));`,
   );
   const productFormation = newId();
   lines.push(
@@ -287,18 +140,18 @@ export function exportToStep(
   lines.push(
     `#${productDefShape} = PRODUCT_DEFINITION_SHAPE('','',#${productDef});`,
   );
-  const shapeDefRep = newId();
+  // SHAPE_DEFINITION_REPRESENTATION — terminal; binds the product
+  // definition to its shape representation. Not referenced elsewhere.
   lines.push(
-    `#${shapeDefRep} = SHAPE_DEFINITION_REPRESENTATION(#${productDefShape},#${shapeRep});`,
+    `#${newId()} = SHAPE_DEFINITION_REPRESENTATION(#${productDefShape},#${shapeRep});`,
   );
 
-  // --- 4. Assemble final file ---
   const ts = new Date().toISOString().replace(/\.\d+Z$/, "");
   const header = [
     "ISO-10303-21;",
     "HEADER;",
     "FILE_DESCRIPTION(('Open Ski Model export'),'2;1');",
-    `FILE_NAME('${name}.step','${ts}',(''),(''),'Open Ski Model','','');`,
+    `FILE_NAME('${productName}.step','${ts}',(''),(''),'Open Ski Model','','');`,
     "FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));",
     "ENDSEC;",
     "DATA;",
@@ -308,13 +161,190 @@ export function exportToStep(
   return header + "\n" + lines.join("\n") + "\n" + footer;
 }
 
+/**
+ * Emit one body (vertex points + edges + faces + closed shell +
+ * manifold solid) into `lines`. Returns the MANIFOLD_SOLID_BREP entity
+ * id, or null if the input had no valid triangles.
+ */
+function emitBody(
+  input: StepMeshInput,
+  bodyName: string,
+  lines: string[],
+  newId: () => number,
+  unitScale: number,
+): number | null {
+  const { positions, indices } = input;
+
+  // 1. Dedup vertices by exact scaled XYZ. Two triangles sharing an
+  //    edge must reference the same VERTEX_POINT so the shell is
+  //    topologically closed.
+  const dedupedPositions: [number, number, number][] = [];
+  const indexMap = new Map<string, number>();
+  const remap: number[] = new Array(positions.length / 3);
+  for (let i = 0; i < positions.length; i += 3) {
+    const x = positions[i] * unitScale;
+    const y = positions[i + 1] * unitScale;
+    const z = positions[i + 2] * unitScale;
+    const key = `${x.toFixed(6)}_${y.toFixed(6)}_${z.toFixed(6)}`;
+    let dedupId = indexMap.get(key);
+    if (dedupId === undefined) {
+      dedupId = dedupedPositions.length;
+      dedupedPositions.push([x, y, z]);
+      indexMap.set(key, dedupId);
+    }
+    remap[i / 3] = dedupId;
+  }
+
+  // Remap triangles to deduped indices; drop degenerates. Two cases:
+  // (a) corners snapped to the same vertex, (b) three distinct vertices
+  // but colinear (zero-area). Both must be filtered HERE — emitting a
+  // degenerate triangle later leaves orphan ORIENTED_EDGE/EDGE_LOOP
+  // entities in the file and risks a zero-length EDGE_CURVE direction.
+  const tris: [number, number, number][] = [];
+  for (let i = 0; i < indices.length; i += 3) {
+    const a = remap[indices[i]];
+    const b = remap[indices[i + 1]];
+    const c = remap[indices[i + 2]];
+    if (a === b || b === c || a === c) continue;
+    const pa = dedupedPositions[a];
+    const pb = dedupedPositions[b];
+    const pc = dedupedPositions[c];
+    const ux = pb[0] - pa[0], uy = pb[1] - pa[1], uz = pb[2] - pa[2];
+    const vx = pc[0] - pa[0], vy = pc[1] - pa[1], vz = pc[2] - pa[2];
+    const nx = uy * vz - uz * vy;
+    const ny = uz * vx - ux * vz;
+    const nz = ux * vy - uy * vx;
+    if (nx === 0 && ny === 0 && nz === 0) continue;
+    tris.push([a, b, c]);
+  }
+  if (tris.length === 0) return null;
+
+  // 2. CARTESIAN_POINT + VERTEX_POINT per unique vertex.
+  const cartesianPointId: number[] = new Array(dedupedPositions.length);
+  const vertexPointId: number[] = new Array(dedupedPositions.length);
+  for (let v = 0; v < dedupedPositions.length; v++) {
+    const [x, y, z] = dedupedPositions[v];
+    const cp = newId();
+    lines.push(
+      `#${cp} = CARTESIAN_POINT('',(${stepNum(x)},${stepNum(y)},${stepNum(z)}));`,
+    );
+    cartesianPointId[v] = cp;
+    const vp = newId();
+    lines.push(`#${vp} = VERTEX_POINT('',#${cp});`);
+    vertexPointId[v] = vp;
+  }
+
+  // 3. EDGE_CURVE per unique undirected edge (lazy). Key sorted vertex
+  //    pair; ORIENTED_EDGE flips orientation when walked backward.
+  const edgeCurveByKey = new Map<string, number>();
+  const getEdgeCurve = (
+    va: number,
+    vb: number,
+  ): { id: number; orientation: boolean } => {
+    const start = Math.min(va, vb);
+    const end = Math.max(va, vb);
+    const key = `${start}_${end}`;
+    let id = edgeCurveByKey.get(key);
+    if (id === undefined) {
+      const [sx, sy, sz] = dedupedPositions[start];
+      const [ex, ey, ez] = dedupedPositions[end];
+      const dx = ex - sx;
+      const dy = ey - sy;
+      const dz = ez - sz;
+      const len = Math.hypot(dx, dy, dz);
+      const dir = newId();
+      lines.push(
+        `#${dir} = DIRECTION('',(${stepNum(dx / len)},${stepNum(dy / len)},${stepNum(dz / len)}));`,
+      );
+      const vec = newId();
+      lines.push(`#${vec} = VECTOR('',#${dir},${stepNum(len)});`);
+      const line = newId();
+      lines.push(`#${line} = LINE('',#${cartesianPointId[start]},#${vec});`);
+      id = newId();
+      lines.push(
+        `#${id} = EDGE_CURVE('',#${vertexPointId[start]},#${vertexPointId[end]},#${line},.T.);`,
+      );
+      edgeCurveByKey.set(key, id);
+    }
+    return { id, orientation: va === start };
+  };
+
+  // 4. ADVANCED_FACE per triangle.
+  const faceIds: number[] = [];
+  for (const [v0, v1, v2] of tris) {
+    const e01 = getEdgeCurve(v0, v1);
+    const e12 = getEdgeCurve(v1, v2);
+    const e20 = getEdgeCurve(v2, v0);
+
+    const oe01 = newId();
+    lines.push(
+      `#${oe01} = ORIENTED_EDGE('',*,*,#${e01.id},${e01.orientation ? ".T." : ".F."});`,
+    );
+    const oe12 = newId();
+    lines.push(
+      `#${oe12} = ORIENTED_EDGE('',*,*,#${e12.id},${e12.orientation ? ".T." : ".F."});`,
+    );
+    const oe20 = newId();
+    lines.push(
+      `#${oe20} = ORIENTED_EDGE('',*,*,#${e20.id},${e20.orientation ? ".T." : ".F."});`,
+    );
+
+    const loop = newId();
+    lines.push(`#${loop} = EDGE_LOOP('',(#${oe01},#${oe12},#${oe20}));`);
+    const bound = newId();
+    lines.push(`#${bound} = FACE_OUTER_BOUND('',#${loop},.T.);`);
+
+    // Plane: origin = v0, axis = triangle normal, ref_dir = edge v0→v1.
+    const p0 = dedupedPositions[v0];
+    const p1 = dedupedPositions[v1];
+    const p2 = dedupedPositions[v2];
+    const ax = p1[0] - p0[0], ay = p1[1] - p0[1], az = p1[2] - p0[2];
+    const bx = p2[0] - p0[0], by = p2[1] - p0[1], bz = p2[2] - p0[2];
+    let nx = ay * bz - az * by;
+    let ny = az * bx - ax * bz;
+    let nz = ax * by - ay * bx;
+    // Degenerate triangles were filtered before this loop, so nlen > 0.
+    const nlen = Math.hypot(nx, ny, nz);
+    nx /= nlen; ny /= nlen; nz /= nlen;
+    const alen = Math.hypot(ax, ay, az);
+    const rx = ax / alen, ry = ay / alen, rz = az / alen;
+
+    const normalDir = newId();
+    lines.push(
+      `#${normalDir} = DIRECTION('',(${stepNum(nx)},${stepNum(ny)},${stepNum(nz)}));`,
+    );
+    const refDir = newId();
+    lines.push(
+      `#${refDir} = DIRECTION('',(${stepNum(rx)},${stepNum(ry)},${stepNum(rz)}));`,
+    );
+    const axis = newId();
+    lines.push(
+      `#${axis} = AXIS2_PLACEMENT_3D('',#${cartesianPointId[v0]},#${normalDir},#${refDir});`,
+    );
+    const plane = newId();
+    lines.push(`#${plane} = PLANE('',#${axis});`);
+
+    const face = newId();
+    lines.push(
+      `#${face} = ADVANCED_FACE('',(#${bound}),#${plane},.T.);`,
+    );
+    faceIds.push(face);
+  }
+
+  if (faceIds.length === 0) return null;
+
+  const shellId = newId();
+  lines.push(
+    `#${shellId} = CLOSED_SHELL('',(${faceIds.map((id) => `#${id}`).join(",")}));`,
+  );
+  const solidId = newId();
+  lines.push(`#${solidId} = MANIFOLD_SOLID_BREP('${bodyName}',#${shellId});`);
+  return solidId;
+}
+
 /** STEP numeric format — short decimals with explicit decimal point. */
 function stepNum(n: number): string {
-  // STEP rejects 1e-7 style; use plain decimals. Trim trailing zeros
-  // but keep at least one decimal so the parser sees a REAL.
   if (!Number.isFinite(n)) return "0.";
   const s = n.toFixed(8);
-  // Strip trailing zeros after the decimal point, but leave at least
-  // one digit so "1.00000000" → "1.".
   return s.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, ".");
 }

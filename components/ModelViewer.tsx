@@ -32,7 +32,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { buildWatertight, buildShapedWatertight } from "@/lib/mesh/watertight";
 import { buildContourLines } from "@/lib/mesh/contours";
 import { buildPlinth } from "@/lib/mesh/plinth";
-import { exportToStep } from "@/lib/mesh/step-export";
+import { exportToStep, type StepMeshInput } from "@/lib/mesh/step-export";
 import { buildTextMesh, loadFont, measureTextWidth } from "@/lib/mesh/text";
 import { buildCompassArrow } from "@/lib/mesh/compass";
 import type { ElevationResponse } from "@/lib/elevation/types";
@@ -724,89 +724,64 @@ export default function ModelViewer({
   }, [label]);
 
   // --- 6. STEP export ---
-  // STEP gives a true B-rep solid (each triangle → an ADVANCED_FACE in
-  // a single MANIFOLD_SOLID_BREP) so CAD apps like Fusion / SolidWorks
-  // open the model as one selectable object rather than a triangle
-  // soup. We concatenate terrain + plinth + any raised-fallback
-  // engravings into one big vertex buffer; the exporter dedupes
-  // coincident vertices so adjacent meshes fuse into a single solid.
+  // STEP gives a true B-rep solid: each input mesh becomes its own
+  // MANIFOLD_SOLID_BREP (triangles → ADVANCED_FACEs) so CAD apps like
+  // Fusion / SolidWorks open the model as selectable bodies rather
+  // than a triangle soup. We export terrain + plinth + any
+  // raised-fallback engravings as SEPARATE solids under one product,
+  // because merging them via CSG.union or vertex-dedup concatenation
+  // breaks the closed-manifold contract (open boundary edges or
+  // duplicated internal faces) and strict CAD readers reject the file.
+  // Users can stitch / boolean-union the bodies in CAD if desired.
   const exportSTEP = useCallback(() => {
-    const scene = sceneRef.current;
     const terrain = terrainRef.current;
-    if (!scene || !terrain) return;
+    if (!terrain) return;
     const plinth = plinthRef.current;
 
-    // 1. Build the list of meshes to include. Try CSG-union plinth +
-    //    terrain first so the seam closes cleanly; fall back to two
-    //    separate meshes (the exporter will fuse them by position
-    //    dedup).
+    // Clone each source mesh, bake world transform, extract positions
+    // + indices. Each entry becomes one MANIFOLD_SOLID_BREP.
     const meshes: Mesh[] = [];
-    let unionMesh: Mesh | null = null;
-    if (plinth) {
-      try {
-        terrain.computeWorldMatrix(true);
-        plinth.computeWorldMatrix(true);
-        const u = CSG.FromMesh(terrain).union(CSG.FromMesh(plinth));
-        unionMesh = u.toMesh("export-step", null, scene, true);
-      } catch (err) {
-        console.warn("[step] CSG union failed; using separate meshes", err);
-      }
-    }
-    if (unionMesh) {
-      meshes.push(unionMesh);
-    } else {
-      const tc = terrain.clone("export-step-terrain", null, true);
-      if (tc) {
-        tc.computeWorldMatrix(true);
-        tc.bakeCurrentTransformIntoVertices();
-        meshes.push(tc);
-      }
-      if (plinth) {
-        const pc = plinth.clone("export-step-plinth", null, true);
-        if (pc) {
-          pc.computeWorldMatrix(true);
-          pc.bakeCurrentTransformIntoVertices();
-          meshes.push(pc);
-        }
-      }
-    }
-    for (const f of engravingFallbackRef.current) {
-      const fc = f.clone(`export-step-${f.name}`, null, true);
-      if (fc) {
-        fc.computeWorldMatrix(true);
-        fc.bakeCurrentTransformIntoVertices();
-        meshes.push(fc);
-      }
-    }
-    if (meshes.length === 0) return;
+    const bodies: StepMeshInput[] = [];
 
-    // 2. Concatenate positions + indices (with index offsets).
-    const allPositions: number[] = [];
-    const allIndices: number[] = [];
-    for (const m of meshes) {
-      const p = m.getVerticesData(VertexBuffer.PositionKind);
-      const idx = m.getIndices();
-      if (!p || !idx) continue;
-      const vertOffset = allPositions.length / 3;
-      for (let i = 0; i < p.length; i++) allPositions.push(p[i]);
-      for (let i = 0; i < idx.length; i++) allIndices.push(idx[i] + vertOffset);
+    const collect = (m: Mesh, name: string) => {
+      const clone = m.clone(`export-step-${name}`, null, true);
+      if (!clone) return;
+      clone.computeWorldMatrix(true);
+      clone.bakeCurrentTransformIntoVertices();
+      meshes.push(clone);
+      const p = clone.getVerticesData(VertexBuffer.PositionKind);
+      const idx = clone.getIndices();
+      if (!p || !idx) return;
+      bodies.push({
+        positions: Array.from(p),
+        indices: Array.from(idx),
+        name,
+      });
+    };
+
+    collect(terrain, "terrain");
+    if (plinth) collect(plinth, "plinth");
+    for (let i = 0; i < engravingFallbackRef.current.length; i++) {
+      collect(engravingFallbackRef.current[i], `engraving-${i + 1}`);
+    }
+    if (bodies.length === 0) {
+      for (const m of meshes) m.dispose();
+      return;
     }
 
-    // 3. Generate STEP text.
     const stepName = label ? slug(label) : "ski-model";
     let stepStr: string;
     try {
-      stepStr = exportToStep(
-        { positions: allPositions, indices: allIndices },
-        { name: stepName, unitScale: MM_PER_INCH },
-      );
+      stepStr = exportToStep(bodies, {
+        name: stepName,
+        unitScale: MM_PER_INCH,
+      });
     } catch (err) {
       console.error("[step] export failed", err);
       for (const m of meshes) m.dispose();
       return;
     }
 
-    // 4. Trigger download.
     const blob = new Blob([stepStr], { type: "application/STEP" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
