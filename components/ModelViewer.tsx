@@ -266,43 +266,49 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
     }
   }
 
-  // CSG subtract brand negatives from whichever has the bottom face.
+  // CSG subtract brand negatives from the plinth's bottom face.
+  // We never attempt this on the terrain mesh directly: the terrain can have
+  // 100K+ triangles, which makes Babylon's synchronous CSG block the main
+  // thread for many seconds and produce unreliable results. When there is no
+  // plinth, the brand sits on the underside of the terrain (invisible from
+  // the normal viewport angle) — raised-fallback inclusion in the STL/STEP
+  // export is sufficient; slicers treat overlapping shells as carved.
   if (brandNegatives.length) {
-    const host = newPlinth ?? plinthMesh ?? terrainMesh;
-    let csgOk = false;
-    try {
-      for (const n of brandNegatives) {
-        n.computeWorldMatrix(true);
-        n.bakeCurrentTransformIntoVertices();
-      }
-      host.computeWorldMatrix(true);
-      let hostCSG = CSG.FromMesh(host);
-      for (const n of brandNegatives) {
-        hostCSG = hostCSG.subtract(CSG.FromMesh(n));
-      }
-      const engraved = hostCSG.toMesh(host.name + "-engraved", host.material, scene, true);
-      if (engraved.getTotalVertices() === 0) {
-        console.warn("[engraving] brand CSG produced empty mesh — falling back to raised");
-        engraved.dispose();
-      } else {
-        engraved.enableEdgesRendering(0.95);
-        engraved.edgesWidth = 1.5;
-        engraved.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
-        if (host === terrainMesh) {
-          newTerrain = engraved;
+    const host = newPlinth ?? plinthMesh ?? null;
+    if (!host) {
+      for (const n of brandNegatives) raisedFallback.push(n);
+    } else {
+      let csgOk = false;
+      try {
+        for (const n of brandNegatives) {
+          n.computeWorldMatrix(true);
+          n.bakeCurrentTransformIntoVertices();
+        }
+        host.computeWorldMatrix(true);
+        let hostCSG = CSG.FromMesh(host);
+        for (const n of brandNegatives) {
+          hostCSG = hostCSG.subtract(CSG.FromMesh(n));
+        }
+        const engraved = hostCSG.toMesh(host.name + "-engraved", host.material, scene, true);
+        if (engraved.getTotalVertices() === 0) {
+          console.warn("[engraving] brand CSG produced empty mesh — falling back to raised");
+          engraved.dispose();
         } else {
+          engraved.enableEdgesRendering(0.95);
+          engraved.edgesWidth = 1.5;
+          engraved.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
           newPlinth?.dispose();
           newPlinth = engraved;
+          csgOk = true;
         }
-        csgOk = true;
+      } catch (err) {
+        console.warn("[engraving] brand CSG failed — falling back to raised", err);
       }
-    } catch (err) {
-      console.warn("[engraving] brand CSG failed — falling back to raised", err);
-    }
-    if (csgOk) {
-      for (const n of brandNegatives) n.dispose();
-    } else {
-      for (const n of brandNegatives) raisedFallback.push(n);
+      if (csgOk) {
+        for (const n of brandNegatives) n.dispose();
+      } else {
+        for (const n of brandNegatives) raisedFallback.push(n);
+      }
     }
   }
 
@@ -746,6 +752,11 @@ export default function ModelViewer({
     const collect = (m: Mesh, name: string) => {
       const clone = m.clone(`export-step-${name}`, null, true);
       if (!clone) return;
+      // Babylon's clone() shares the underlying Geometry with the original.
+      // bakeCurrentTransformIntoVertices() mutates vertex positions in place,
+      // so without makeGeometryUnique() the original mesh's vertices are
+      // modified too — causing the visible displacement after export.
+      clone.makeGeometryUnique();
       clone.computeWorldMatrix(true);
       clone.bakeCurrentTransformIntoVertices();
       meshes.push(clone);
