@@ -679,12 +679,14 @@ export default function ModelViewer({
       const clones: Mesh[] = [];
       const terrainClone = terrain.clone("export-terrain", null, true);
       if (terrainClone) {
+        terrainClone.makeGeometryUnique();
         terrainClone.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
         clones.push(terrainClone);
       }
       if (plinth) {
         const plinthClone = plinth.clone("export-plinth", null, true);
         if (plinthClone) {
+          plinthClone.makeGeometryUnique();
           plinthClone.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
           clones.push(plinthClone);
         }
@@ -692,6 +694,7 @@ export default function ModelViewer({
       for (const f of engravingFallbackRef.current) {
         const fc = f.clone(`export-${f.name}`, null, true);
         if (fc) {
+          fc.makeGeometryUnique();
           fc.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
           clones.push(fc);
         }
@@ -712,6 +715,7 @@ export default function ModelViewer({
     for (const f of fallbacks) {
       const fc = f.clone(`export-${f.name}`, null, true);
       if (fc) {
+        fc.makeGeometryUnique();
         fc.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
         fallbackClones.push(fc);
       }
@@ -781,9 +785,9 @@ export default function ModelViewer({
     }
 
     const stepName = label ? slug(label) : "ski-model";
-    let stepStr: string;
+    let blob: Blob;
     try {
-      stepStr = exportToStep(bodies, {
+      blob = exportToStep(bodies, {
         name: stepName,
         unitScale: MM_PER_INCH,
       });
@@ -792,8 +796,6 @@ export default function ModelViewer({
       for (const m of meshes) m.dispose();
       return;
     }
-
-    const blob = new Blob([stepStr], { type: "application/STEP" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;

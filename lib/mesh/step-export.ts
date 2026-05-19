@@ -44,7 +44,7 @@ export interface StepMeshInput {
 export function exportToStep(
   data: StepMeshInput | StepMeshInput[],
   opts: StepExportOptions = {},
-): string {
+): Blob {
   const productName = (opts.name ?? "ski-model").replace(/'/g, "");
   const unitScale = opts.unitScale ?? 25.4;
   const inputs = Array.isArray(data) ? data : [data];
@@ -158,7 +158,16 @@ export function exportToStep(
   ].join("\n");
   const footer = ["ENDSEC;", "END-ISO-10303-21;", ""].join("\n");
 
-  return header + "\n" + lines.join("\n") + "\n" + footer;
+  // Build the Blob in chunks to avoid exceeding V8's max string length
+  // (~1 billion chars). Large terrain meshes generate millions of entity
+  // lines; a single join would exceed the limit.
+  const CHUNK = 10_000;
+  const parts: BlobPart[] = [header + "\n"];
+  for (let i = 0; i < lines.length; i += CHUNK) {
+    parts.push(lines.slice(i, i + CHUNK).join("\n") + "\n");
+  }
+  parts.push(footer);
+  return new Blob(parts, { type: "application/STEP" });
 }
 
 /**
