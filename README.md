@@ -4,7 +4,7 @@ A web-based PWA (Next.js, deployed on Vercel) that generates 3D-printable
 topographic models of ski mountains. Type a mountain, frame a bounding
 box, get a watertight `.stl` you can hand to your slicer.
 
-![Hero — map picker beside the 3D viewer](docs/images/hero.svg)
+![Hero — map picker beside the 3D viewer](docs/images/hero.png)
 
 > **Status: feature-complete.** Map picker, server-side elevation pipeline
 > (AWS terrarium + USGS 3DEP), Babylon viewer with hillshade and
@@ -17,7 +17,7 @@ box, get a watertight `.stl` you can hand to your slicer.
   refine with a draggable / resizable bounding box on a MapTiler outdoor
   basemap. No Mapbox token needed.
 
-  ![Map picker with draggable bbox](docs/images/map-picker.svg)
+  ![Map picker with draggable bbox](docs/images/map-picker.png)
 
 - **Open elevation data, no API keys.**
   - AWS Open Data **terrain tiles** (terrarium PNG encoding) — global,
@@ -30,7 +30,7 @@ box, get a watertight `.stl` you can hand to your slicer.
   aspect locked so the inscribed figure fills the frame. Circle and
   hexagon can be rotated; drag a corner handle to spin.
 
-  ![Shape options: rectangle / circle / hexagon](docs/images/shapes.svg)
+  ![Shape options: rectangle / circle / hexagon](docs/images/shapes.png)
 
 - **Watertight mesh, CSG-engraved.** Top surface + side walls + bottom
   face, all oriented with consistent outward normals — safe for any
@@ -43,7 +43,7 @@ box, get a watertight `.stl` you can hand to your slicer.
   - *Brand on bottom:* `craftedcarving.com` engraved into the bottom
     face. Independent toggle.
 
-  ![Inlaid plinth label + compass and brand on bottom](docs/images/engravings.svg)
+  ![Inlaid plinth label + compass and brand on bottom](docs/images/engravings.png)
 
 - **Adjustable mesh density.** Normal (256), High (512), or a Custom
   slider up to 1024. File size scales ~N²; the UI warns past 512.
@@ -51,12 +51,12 @@ box, get a watertight `.stl` you can hand to your slicer.
   (forest → scrub → rock → snow), sun-angle hillshade, and toggleable
   marching-squares contour lines.
 
-  ![Babylon viewer with hillshade + contours](docs/images/viewer.svg)
+  ![Babylon viewer with hillshade + contours](docs/images/viewer.png)
 
 - **STL export** in millimeters — pop it into Cura / PrusaSlicer / Bambu
   Studio and it'll already be the right physical size.
 
-  ![Exported STL loaded in a slicer](docs/images/slicer.svg)
+  ![Exported STL loaded in a slicer](docs/images/slicer.png)
 
 - **STEP export** for CAD. Unlike STL (triangle soup), STEP is a true
   B-rep solid (AP203 / CONFIG_CONTROL_DESIGN): every triangle becomes an
