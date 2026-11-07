@@ -16,6 +16,17 @@ const nextConfig = {
   experimental: {
     optimizePackageImports: ["maplibre-gl"],
   },
+  webpack: (config, { isServer, webpack }) => {
+    // manifold-3d's Emscripten loader has a Node-only branch that does
+    // `import("node:module")`. It never runs in the browser, but webpack
+    // refuses to bundle the `node:` scheme for a client target.
+    if (!isServer) {
+      config.plugins.push(
+        new webpack.IgnorePlugin({ resourceRegExp: /^node:module$/ }),
+      );
+    }
+    return config;
+  },
 };
 
 export default withSerwist(nextConfig);

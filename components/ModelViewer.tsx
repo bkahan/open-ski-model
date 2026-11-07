@@ -29,12 +29,28 @@ import { STLExport } from "@babylonjs/serializers/stl";
 import type * as opentype from "opentype.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { buildWatertight, buildShapedWatertight } from "@/lib/mesh/watertight";
+import {
+  buildWatertight,
+  buildShapedWatertight,
+  DEFAULT_PALETTE,
+} from "@/lib/mesh/watertight";
 import { buildContourLines } from "@/lib/mesh/contours";
+import {
+  loadManifold,
+  manifoldFromMesh,
+  vertexDataFromManifold,
+  withSolids,
+  type ColorAt,
+} from "@/lib/mesh/manifold";
 import { buildPlinth } from "@/lib/mesh/plinth";
 import { buildRunRibbons } from "@/lib/mesh/runs";
 import { exportToStep } from "@/lib/mesh/step-export";
-import { buildTextMesh, loadFont, measureTextWidth } from "@/lib/mesh/text";
+import {
+  buildTextMesh,
+  buildTextSolid,
+  loadFont,
+  measureTextWidth,
+} from "@/lib/mesh/text";
 import { buildCompassArrow } from "@/lib/mesh/compass";
 import type { ElevationResponse } from "@/lib/elevation/types";
 import type { ColorScheme } from "@/lib/resort/colors";
@@ -72,6 +88,8 @@ const RIBBON_LIFT_IN = 0.008;
 const BEVEL_DEG = 35;
 const BRAND_TEXT = "craftedcarving.com";
 const ENGRAVE_DEPTH_IN = 0.04; // ~1 mm
+/** The cutter starts this far outside the face so the boolean never sees coplanar faces. */
+const BRAND_OVERCUT_IN = 0.01;
 const LABEL_CAP_HEIGHT_IN = 0.18;
 const BRAND_CAP_HEIGHT_IN = 0.12;
 const COMPASS_SIZE_IN = 0.45;
@@ -122,6 +140,7 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
     widthInches,
     heightInches,
     rotation,
+    baseThicknessInches,
     engraveLabel,
     engraveBrand,
     placeLabel,
@@ -155,7 +174,6 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
   const bevelEngravingRotation = qShape.multiply(qBevel);
 
   const plinthNegatives: Mesh[] = [];
-  const brandNegatives: Mesh[] = [];
 
   // --- Label text ---
   if (engraveLabel && plinthMesh && placeLabel.trim()) {
@@ -199,32 +217,6 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
       plinthNegatives.push(compassMesh);
     } else {
       console.warn("[engraving] compass mesh was null");
-    }
-  }
-
-  // --- Brand on bottom face ---
-  if (engraveBrand) {
-    const brandMesh = buildTextMesh({
-      font,
-      text: BRAND_TEXT,
-      size: BRAND_CAP_HEIGHT_IN,
-      depth: ENGRAVE_DEPTH_IN * 2,
-      scene,
-      name: "brand-glyphs",
-    });
-    if (brandMesh) {
-      const w = measureTextWidth(font, BRAND_TEXT, BRAND_CAP_HEIGHT_IN);
-      brandMesh.position.x = -w / 2;
-      brandMesh.bakeCurrentTransformIntoVertices();
-      const qXFlip = Quaternion.RotationAxis(new Vector3(1, 0, 0), Math.PI);
-      brandMesh.rotationQuaternion = qShape.multiply(qXFlip);
-      brandMesh.position.y = -0.005;
-      // Use whichever material we'll engrave into so the visible
-      // fallback mesh matches its host.
-      brandMesh.material = (plinthMesh ?? terrainMesh).material;
-      brandNegatives.push(brandMesh);
-    } else {
-      console.warn("[engraving] brand mesh was null (buildTextMesh failed)");
     }
   }
 
@@ -276,47 +268,83 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
     }
   }
 
-  // CSG subtract brand negatives from whichever has the bottom face.
-  if (brandNegatives.length) {
+  // --- Brand on the bottom face, cut with Manifold ---
+  // Whichever body owns the bottom face hosts it: the plinth when there
+  // is one, otherwise the terrain. Both sit at the origin, so local
+  // vertex coordinates are world coordinates.
+  if (engraveBrand) {
     const host = newPlinth ?? plinthMesh ?? terrainMesh;
-    let csgOk = false;
     try {
-      for (const n of brandNegatives) {
-        n.computeWorldMatrix(true);
-        n.bakeCurrentTransformIntoVertices();
-      }
-      host.computeWorldMatrix(true);
-      let hostCSG = CSG.FromMesh(host);
-      for (const n of brandNegatives) {
-        hostCSG = hostCSG.subtract(CSG.FromMesh(n));
-      }
-      const engraved = hostCSG.toMesh(host.name + "-engraved", host.material, scene, true);
-      if (engraved.getTotalVertices() === 0) {
-        console.warn("[engraving] brand CSG produced empty mesh — falling back to raised");
-        engraved.dispose();
-      } else {
-        engraved.enableEdgesRendering(0.95);
-        engraved.edgesWidth = 1.5;
-        engraved.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
+      const engraved = await engraveBrandOnBottom(scene, font, host, rotation, {
+        terrainBaseY: baseThicknessInches,
+      });
+      if (engraved) {
         if (host === terrainMesh) {
           newTerrain = engraved;
         } else {
           newPlinth?.dispose();
           newPlinth = engraved;
         }
-        csgOk = true;
       }
     } catch (err) {
-      console.warn("[engraving] brand CSG failed — falling back to raised", err);
-    }
-    if (csgOk) {
-      for (const n of brandNegatives) n.dispose();
-    } else {
-      for (const n of brandNegatives) raisedFallback.push(n);
+      console.warn("[engraving] brand failed; leaving the bottom plain", err);
     }
   }
 
   return { newPlinth, newTerrain, raisedFallback };
+}
+
+/**
+ * Cut the brand text into the underside of `host` (whose bottom face is
+ * the y = 0 plane). The text is mirrored so it reads correctly when the
+ * model is turned over, and follows the model's rotation.
+ */
+async function engraveBrandOnBottom(
+  scene: Scene,
+  font: opentype.Font,
+  host: Mesh,
+  rotationDeg: number,
+  opts: { terrainBaseY: number },
+): Promise<Mesh | null> {
+  const positions = host.getVerticesData(VertexBuffer.PositionKind);
+  const indices = host.getIndices();
+  if (!positions || !indices) return null;
+
+  const m = await loadManifold();
+  const text = buildTextSolid(m, font, BRAND_TEXT, BRAND_CAP_HEIGHT_IN, ENGRAVE_DEPTH_IN + BRAND_OVERCUT_IN);
+  if (!text) return null;
+  const width = measureTextWidth(font, BRAND_TEXT, BRAND_CAP_HEIGHT_IN);
+
+  // Text is built in XY, extruded along +Z. Lay it into the XZ plane
+  // pointing up into the body (y from -overcut to +depth), with the
+  // glyph y axis mapped to -z so it mirrors for reading from below.
+  const placed = text
+    .translate([-width / 2, -BRAND_CAP_HEIGHT_IN / 2, -BRAND_OVERCUT_IN])
+    .rotate([-90, 0, 0])
+    .rotate([0, rotationDeg, 0]);
+  const solid = manifoldFromMesh(m, { positions, indices });
+  const cut = m.Manifold.difference(solid, placed);
+  return withSolids([text, placed, solid, cut], () => {
+    if (cut.status() !== "NoError" || cut.numTri() === 0) {
+      console.warn("[engraving] brand difference failed:", cut.status());
+      return null;
+    }
+    // Manifold output carries no colors; re-paint the terrain surface by
+    // height and everything else (walls, bottom, pockets) in base color.
+    const topY = host.getBoundingInfo().boundingBox.maximumWorld.y;
+    const span = Math.max(topY - opts.terrainBaseY, 1e-6);
+    const colorAt: ColorAt = (_x, y, _z, ny) =>
+      ny > 0.3 && y > opts.terrainBaseY - 1e-4
+        ? DEFAULT_PALETTE.surface((y - opts.terrainBaseY) / span)
+        : DEFAULT_PALETTE.base;
+    const mesh = new Mesh(host.name + "-engraved", scene);
+    vertexDataFromManifold(cut, colorAt).applyToMesh(mesh, true);
+    mesh.material = host.material;
+    mesh.enableEdgesRendering(0.95);
+    mesh.edgesWidth = 1.5;
+    mesh.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
+    return mesh;
+  });
 }
 
 const MM_PER_INCH = 25.4;

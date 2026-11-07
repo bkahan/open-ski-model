@@ -24,6 +24,21 @@ colored by difficulty and lifts as stripes.
   at least three.
 - Settings mirrored in the URL (`runs`, `lf`, `mw`, `cs`).
 
+### Engraving rework (in progress)
+
+Babylon's BSP CSG took ~100 s and 3 GB to cut the brand into a 256-grid
+terrain, which crashes phones, and the plinth was a 9 mm bevel sliver with
+no visible text. Replacing both:
+
+- E1 (done): Manifold (WASM) boolean engine; rectangle terrain made truly
+  manifold (bottom fan over the wall ring); bottom brand cut with Manifold.
+- E2: chamfered plinth rim (15 mm south, 6 mm elsewhere, 35°), label +
+  compass as pockets via Manifold, font sized from the chamfer slope and
+  shrunk to fit, with a 3 mm cap-height floor. Pocket fill bodies emitted
+  as color groups for multicolor.
+- E3: STL/STEP export from the Manifold union (terrain + plinth) instead of
+  Babylon CSG; remove the Babylon CSG path and raised-text fallback.
+
 ### Phase R2 — inlay bodies
 
 - Turn each color group into a solid: ribbon extruded ~0.8 mm down into

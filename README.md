@@ -32,10 +32,13 @@ box, get a watertight `.stl` you can hand to your slicer.
 
   ![Shape options: rectangle / circle / hexagon](docs/images/shapes.png)
 
-- **Watertight mesh, CSG-engraved.** Top surface + side walls + bottom
-  face, all oriented with consistent outward normals — safe for any
-  slicer. Engravings (label, compass, brand) are cut with a real CSG
-  pass via Manifold, so the result stays watertight after subtraction.
+- **Watertight mesh, boolean-engraved.** Top surface + side walls + bottom
+  face, all oriented with consistent outward normals and free of
+  T-junctions, so the solid is manifold. The bottom brand is cut with
+  [Manifold](https://github.com/elalish/manifold) (WASM), which handles a
+  130k-triangle terrain in well under a second; the plinth label and
+  compass still go through Babylon's CSG and are being moved over (see
+  `docs/roadmap.md`).
 - **Optional plinth + engravings.**
   - *Label + compass:* a beveled plinth wraps the model and the place
     name + a north-pointing arrow are inlaid into the south rim, tilted
@@ -85,7 +88,7 @@ box, get a watertight `.stl` you can hand to your slicer.
 ```bash
 # Create .env.local with your MapTiler key (free at https://www.maptiler.com/cloud/)
 echo 'NEXT_PUBLIC_MAPTILER_KEY=your_key_here' > .env.local
-npm install
+npm install   # also copies manifold-3d's WASM into public/manifold.wasm
 npm run dev
 npm test      # unit tests (Vitest)
 ```
@@ -143,10 +146,11 @@ outward, the volume is well-defined.
 
 For non-rectangular shapes the grid is masked to the inscribed circle or
 hexagon and the side walls follow the shape's perimeter (with optional
-rotation). Engravings — the plinth label, the compass arrow, and the
-brand mark — are cut with a real CSG difference via Manifold against
-extruded glyph / arrow geometry, so the model stays watertight even
-after the subtraction.
+rotation). The rectangle's bottom face is a fan over the wall perimeter
+ring (not a single quad), so every base edge is shared by exactly two
+triangles. The brand mark is cut with a Manifold boolean difference
+against extruded glyph outlines (`lib/mesh/manifold.ts`,
+`lib/mesh/text.ts`), so the model stays watertight after the subtraction.
 
 Scene units are inches. Vertical scale is
 `elevation_m × (print_width_in / bbox_width_m) × verticalExaggeration`,
@@ -230,6 +234,7 @@ lib/
     settings.ts            Run settings defaults + limits
     types.ts               Run / lift / response types
   mesh/
+    manifold.ts            Manifold (WASM) loader + mesh conversions
     watertight.ts          Build closed VertexData from height grid
     runs.ts                Drape runs + lifts as ribbons, one per color
     contours.ts            Marching squares contour lines

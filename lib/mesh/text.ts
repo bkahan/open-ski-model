@@ -12,7 +12,10 @@
 
 import { MeshBuilder, Mesh, Scene, Vector3 } from "@babylonjs/core";
 import earcut from "earcut";
+import type { Manifold, ManifoldToplevel } from "manifold-3d";
 import * as opentype from "opentype.js";
+
+import { extrudeContours } from "./manifold";
 
 let cachedFont: opentype.Font | null = null;
 let loadingPromise: Promise<opentype.Font> | null = null;
@@ -238,6 +241,35 @@ export function buildTextMesh(opts: TextMeshOptions): Mesh | null {
   const merged = Mesh.MergeMeshes(meshes, true, true, undefined, false, false);
   if (merged) merged.name = opts.name ?? "text";
   return merged;
+}
+
+/**
+ * Glyph outlines for `text` as closed contours in the XY plane, +y up,
+ * baseline at y = 0, left edge at x = 0. Outer contours and holes are
+ * both included; the consumer's fill rule sorts them out.
+ */
+export function textContours(
+  font: opentype.Font,
+  text: string,
+  size: number,
+): Array<Array<[number, number]>> {
+  return pathToContours(font.getPath(text, 0, 0, size)).filter((c) => c.length >= 3);
+}
+
+/**
+ * Solid text in the XY plane, extruded along +Z from 0 to `depth`.
+ * Returns null for a string with no visible glyphs.
+ */
+export function buildTextSolid(
+  m: ManifoldToplevel,
+  font: opentype.Font,
+  text: string,
+  size: number,
+  depth: number,
+): Manifold | null {
+  const contours = textContours(font, text, size);
+  if (contours.length === 0) return null;
+  return extrudeContours(m, contours, depth);
 }
 
 /**
