@@ -49,6 +49,7 @@ import type { ResortData, ResortRequest } from "@/lib/resort/types";
 import {
   HEX_FLAT_TO_LONG,
   shapeAABBHalf,
+  shapeIsRotatable,
   type Shape,
 } from "@/lib/shape";
 import type { Bbox, LngLat, SearchResult } from "@/lib/types";
@@ -87,7 +88,7 @@ const RESORT_FRAME_PADDING = 1.08;
 const RESORT_FRAME_MIN_RUNS = 3;
 const RESORT_FETCH_DEBOUNCE_MS = 700;
 /** Mirrors the server cap in /api/resort. */
-const RESORT_MAX_FETCH_DEG = 0.5;
+const RESORT_MAX_FETCH_DEG = 1;
 
 type View = "map" | "loading" | "viewer";
 
@@ -308,8 +309,8 @@ export default function Home() {
   }, [bbox]);
 
   const resolvedScheme = useMemo(
-    () => resolveColorScheme(resortSettings.colorScheme, bbox ?? [0, 0, 0, 0]),
-    [resortSettings.colorScheme, bbox],
+    () => resolveColorScheme(resortSettings.colorScheme, bbox ?? [0, 0, 0, 0], resort?.convention ?? null),
+    [resortSettings.colorScheme, bbox, resort?.convention],
   );
 
   // All bbox refits are done inside the explicit handlers (handleShapeChange,
@@ -348,8 +349,22 @@ export default function Home() {
   };
 
   const handleSearch = (result: SearchResult) => {
-    setLabel(result.displayName.split(",")[0]);
+    setLabel(result.name);
     setFlyTo(result.center);
+
+    if (result.kind === "resort") {
+      // The index gives the resort's natural viewport: turn the frame to
+      // its bearing (when the shape has one) and fit its padded bounds.
+      const nextRotation =
+        shapeIsRotatable(shape) && result.bearing !== undefined
+          ? ((Math.round(result.bearing) % 360) + 360) % 360
+          : rotation;
+      setRotation(nextRotation);
+      const [hW, hH] = shapeAABBHalf(shape, size.widthInches, size.heightInches, nextRotation);
+      setBbox(snapBboxToAspect(scaleBbox(result.bbox, RESORT_FRAME_PADDING), hW / hH, 0));
+      return;
+    }
+
     const initial = snapBboxToAspect(result.bbox, aabbAspect, DEFAULT_SHAPE_WIDTH_METERS);
     setBbox(initial);
     if (resortSettings.showRuns) {
@@ -654,9 +669,13 @@ export default function Home() {
 
         <footer className="text-[11px] text-slate-500 leading-relaxed pt-2 border-t border-slate-800">
           <p>
-            Phase 3 ✓ Watertight mesh, contour lines, sun-angle hillshade,
-            STL export, shareable URLs, installable PWA, auto USGS 3DEP for
-            US bboxes.
+            Elevation: AWS Terrain Tiles, USGS 3DEP. Ski runs and lifts:
+            data from{" "}
+            <a href="https://openskidata.org" className="underline" target="_blank" rel="noreferrer">
+              OpenSkiData / OpenSkiMap.org
+            </a>
+            , © OpenStreetMap contributors (ODbL), Skimap.org, Who&apos;s On
+            First, © Mapterhorn.
           </p>
         </footer>
       </aside>

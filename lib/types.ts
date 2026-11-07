@@ -29,13 +29,19 @@ export interface ModelSpec {
   label?: string;
 }
 
-/** Result of a Nominatim geocoding search. */
+/** A search hit: a ski area from the OpenSkiData index, or a Nominatim place. */
 export interface SearchResult {
-  placeId: number;
-  displayName: string;
-  /** [W, S, E, N] from Nominatim's boundingbox. */
+  kind: "resort" | "place";
+  id: string;
+  /** Short name shown as the title and used as the model label. */
+  name: string;
+  /** Secondary line: locality for resorts, full display name for places. */
+  detail: string;
+  /** [W, S, E, N]. For resorts, the axis-aligned bounds of the natural viewport. */
   bbox: Bbox;
   center: LngLat;
-  type?: string;
-  category?: string;
+  /** Resorts only: the viewport's rotation, degrees clockwise from north. */
+  bearing?: number;
+  /** Resorts only: which trail-marking convention the data uses. */
+  convention?: "north_america" | "europe" | "japan";
 }

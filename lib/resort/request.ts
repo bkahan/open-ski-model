@@ -4,7 +4,7 @@
 import type { Bbox } from "@/lib/types";
 
 /** Per-side cap on the fetch area, in degrees. Mirrored in app/page.tsx. */
-export const MAX_BBOX_DEG = 0.5;
+export const MAX_BBOX_DEG = 1;
 
 export function parseResortRequest(input: unknown): Bbox | string {
   if (typeof input !== "object" || input === null) return "body must be an object";

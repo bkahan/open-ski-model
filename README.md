@@ -67,13 +67,17 @@ box, get a watertight `.stl` you can hand to your slicer.
   is wrapped as a single `MANIFOLD_SOLID_BREP`. Fusion / SolidWorks /
   FreeCAD open it as one selectable object. Units are declared as mm.
 
-- **Ski runs and lifts.** Downhill pistes and lifts come from
-  OpenStreetMap (Overpass) and are drawn on the map and draped on the 3D
-  terrain, colored by difficulty. Searching a resort auto-frames the
-  bbox around its runs. Trail colors follow the North American
-  (green / blue / black) or European (blue / red / black) convention,
-  picked by hemisphere or set by hand. Lifts are a toggle; runs narrower
-  than the adjustable minimum width (1.2 mm) are widened so they print.
+- **Ski runs and lifts.** Downhill runs and lifts come from
+  [OpenSkiData](https://openskidata.org) (OpenSkiMap's processed OSM
+  data), rebuilt weekly by a GitHub Action into 1° cells on the `data`
+  branch and served through jsDelivr, so no query server sits in the
+  request path. They're drawn on the map and draped on the 3D terrain,
+  colored by difficulty. The search box lists ski resorts from the same
+  dataset; picking one turns and fits the frame to the resort's natural
+  viewport. Trail colors follow the convention the data was tagged under
+  (North America green / blue / black, Europe and Japan blue / red /
+  black) or can be set by hand. Lifts are a toggle; runs narrower than
+  the adjustable minimum width (1.2 mm) are widened so they print.
   Multicolor inlay bodies and 3MF export are next — see
   `docs/roadmap.md`.
 
@@ -92,6 +96,12 @@ npm install   # also copies manifold-3d's WASM into public/manifold.wasm
 npm run dev
 npm test      # unit tests (Vitest)
 ```
+
+Ski-run data is read from the `data` branch via jsDelivr by default. To
+work against a local build of it, run
+`node scripts/build-ski-data.mjs out` (downloads ~1 GB from OpenSkiData;
+one download per day is their limit), serve `out/` with any static
+server, and set `SKI_DATA_BASE` to its URL in `.env.local`.
 
 Open <http://localhost:3000>.
 
@@ -205,7 +215,8 @@ The page reads this on mount and rebuilds the picker / model spec.
 ```
 app/
   api/elevation/route.ts   POST handler (dispatch terrarium / USGS)
-  api/resort/route.ts      POST handler (runs + lifts via Overpass)
+  api/resort/route.ts      POST handler (runs + lifts from the data cells)
+  api/resort/search/       GET handler (ski-area name search)
   layout.tsx               Root + RegisterSW + metadata
   not-found.tsx            404 page (required by Next 16 at build time)
   page.tsx                 Map ↔ viewer state machine
@@ -228,12 +239,16 @@ lib/
     usgs.ts                3DEP exportImage + GeoTIFF parsing (server)
     types.ts               Request/response types
   resort/
-    overpass.ts            Overpass query + response parsing (server)
+    skidata.ts             Data-branch cell reader + ski-area search (server)
+    request.ts             /api/resort request validation
     colors.ts              Difficulty → color per scheme
     geojson.ts             Resort data → GeoJSON for the map
     settings.ts            Run settings defaults + limits
     types.ts               Run / lift / response types
-  mesh/
+scripts/
+  build-ski-data.mjs       OpenSkiData → cells + index (run by the Action)
+  copy-manifold-wasm.mjs   Copies manifold.wasm into public/
+lib/mesh/
     manifold.ts            Manifold (WASM) loader + mesh conversions
     watertight.ts          Build closed VertexData from height grid
     runs.ts                Drape runs + lifts as ribbons, one per color

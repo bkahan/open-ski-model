@@ -13,15 +13,20 @@ colored by difficulty and lifts as stripes.
 
 ### Phase R1 — resort data + overlay (done)
 
-- `POST /api/resort` fetches downhill runs (`piste:type=downhill`) and lifts
-  (`aerialway=*`) from OpenStreetMap via Overpass, cached in memory.
+- Data: OpenSkiData's daily GeoJSON, reduced by `scripts/build-ski-data.mjs`
+  (weekly GitHub Action) to 1° cells + a ski-area index on the `data`
+  branch, read through jsDelivr. Replaced live Overpass queries, which the
+  public instances rejected under load ("all query workers are busy").
+- `POST /api/resort` assembles runs and lifts for a bbox from the cells;
+  `GET /api/resort/search` ranks ski areas by name.
 - Runs drawn on the 2D map and draped on the 3D terrain as ribbons, one
   mesh per color. Lifts toggleable. Minimum run width (default 1.2 mm)
   widens anything narrower.
 - Color scheme auto-picked by hemisphere (N. America green/blue/black,
   Europe blue/red/black), overridable.
-- Search auto-frames the bbox around the resort's runs when the area has
-  at least three.
+- Picking a ski resort in search turns and fits the frame to the resort's
+  natural viewport (OpenSkiData's `viewportHint`); picking a place frames
+  around whatever runs are nearby.
 - Settings mirrored in the URL (`runs`, `lf`, `mw`, `cs`).
 
 ### Engraving rework (in progress)
@@ -62,8 +67,8 @@ no visible text. Replacing both:
 
 ## Known limitations
 
-- Overpass public endpoint rate-limits; set `OVERPASS_URL` to a private
-  instance for heavy use.
+- The data refreshes weekly (Sunday 06:17 UTC); a run added to OSM takes
+  up to a week plus OpenSkiData's daily build to appear.
 - Runs mapped as polygons (`area:piste=yes`) are drawn by their outline.
 - Trail colors can clash with the hypsometric terrain palette in the
   viewer (green on green); the print base will be white.

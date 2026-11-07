@@ -79,7 +79,7 @@ export default function ResortControls({
         <span className="leading-snug">
           <span className="text-slate-200">Show runs</span>
           <span className="block text-[10px] text-slate-500">
-            Downhill pistes from OpenStreetMap, colored by difficulty.
+            Downhill runs from OpenSkiData, colored by difficulty.
           </span>
         </span>
       </label>
