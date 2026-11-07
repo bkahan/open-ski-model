@@ -11,21 +11,21 @@ import type {
   SkiRun,
 } from "./types";
 
-// Tried in order until one answers. The main FOSSGIS instance queues
-// requests under load (and Vercel's shared egress IPs are a heavy
-// neighbor), so it's last; the others publish no rate limit. A private
-// OVERPASS_URL, when set, goes first.
+// All queried at once; the first good answer wins. Public instances queue
+// under load (and Vercel's shared egress IPs are a heavy neighbor), so
+// waiting on them one at a time burned the whole route budget. A private
+// OVERPASS_URL, when set, joins the race.
 const PUBLIC_OVERPASS_URLS = [
   "https://overpass.private.coffee/api/interpreter",
   "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
   "https://overpass-api.de/api/interpreter",
 ];
 
-// Server-side query budget. The query is a bbox lookup of two tags and
-// runs in well under a second; anything longer is queueing.
-const OVERPASS_TIMEOUT_S = 8;
-// Per-attempt wall clock, so two failed mirrors still fit a 30 s route.
-const ATTEMPT_TIMEOUT_MS = 12_000;
+// Server-side query budget. The query itself runs in under a second; the
+// rest is queue time, which this also bounds.
+const OVERPASS_TIMEOUT_S = 20;
+// Wall clock per request, inside the route's 30 s.
+const ATTEMPT_TIMEOUT_MS = 25_000;
 
 const DIFFICULTIES: RunDifficulty[] = [
   "novice",
@@ -87,21 +87,32 @@ export function overpassEndpoints(): string[] {
 
 export async function fetchResortData(bbox: Bbox): Promise<ResortData> {
   const query = buildOverpassQuery(bbox);
-  const failures: string[] = [];
-  for (const url of overpassEndpoints()) {
-    try {
-      return await fetchFromEndpoint(url, query, bbox);
-    } catch (err) {
-      const host = new URL(url).host;
+  const endpoints = overpassEndpoints();
+  const abort = new AbortController();
+  const attempts = endpoints.map((url) =>
+    fetchFromEndpoint(url, query, bbox, abort.signal).catch((err: unknown) => {
       const reason = err instanceof Error ? err.message : String(err);
-      failures.push(`${host}: ${reason}`);
-      console.warn(`[overpass] ${host} failed, trying next`, reason);
-    }
+      throw new Error(`${new URL(url).host}: ${reason}`);
+    }),
+  );
+  try {
+    const data = await Promise.any(attempts);
+    abort.abort();
+    return data;
+  } catch (err) {
+    const reasons = err instanceof AggregateError
+      ? err.errors.map((e: unknown) => (e instanceof Error ? e.message : String(e)))
+      : [String(err)];
+    throw new Error(`All Overpass endpoints failed (${reasons.join("; ")})`);
   }
-  throw new Error(`All Overpass endpoints failed (${failures.join("; ")})`);
 }
 
-async function fetchFromEndpoint(url: string, query: string, bbox: Bbox): Promise<ResortData> {
+async function fetchFromEndpoint(
+  url: string,
+  query: string,
+  bbox: Bbox,
+  cancel: AbortSignal,
+): Promise<ResortData> {
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -109,7 +120,7 @@ async function fetchFromEndpoint(url: string, query: string, bbox: Bbox): Promis
       "User-Agent": `${process.env.NEXT_PUBLIC_APP_NAME ?? "open-ski-model"} (${process.env.NEXT_PUBLIC_APP_CONTACT ?? "https://github.com/bkahan/open-ski-model"})`,
     },
     body: `data=${encodeURIComponent(query)}`,
-    signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
+    signal: AbortSignal.any([cancel, AbortSignal.timeout(ATTEMPT_TIMEOUT_MS)]),
   });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}${res.status === 429 ? " (rate limited)" : ""}`);

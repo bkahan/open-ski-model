@@ -18,7 +18,7 @@ import type { ResortData } from "@/lib/resort/types";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-const CACHE_TTL_MS = 10 * 60 * 1000;
+const CACHE_TTL_MS = 60 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 32;
 
 const cache = new Map<string, { at: number; data: ResortData }>();
