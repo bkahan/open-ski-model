@@ -85,6 +85,11 @@ function bboxOf(lines) {
   return [w, s, e, n];
 }
 
+// A single feature should touch a handful of cells; more means a stray
+// coordinate or an antimeridian wrap, and fanning it out would bloat
+// every cell in between.
+const MAX_CELLS_PER_FEATURE = 16;
+
 function cellsTouching([w, s, e, n]) {
   const keys = [];
   for (let lat = Math.floor(s / CELL_DEG); lat <= Math.floor(n / CELL_DEG); lat++) {
@@ -130,7 +135,7 @@ async function streamFeatures(file, onFeature) {
 function onRun(f) {
   counts.runs++;
   const p = f.properties;
-  if (!p.uses?.includes("downhill") || p.status !== "operating") return;
+  if (!p.uses?.includes("downhill") || p.status !== "operating" || !f.geometry) return;
   const geom = linesOf(f.geometry);
   if (!geom) return;
   const shapes = geom.lines ?? geom.rings;
@@ -143,19 +148,29 @@ function onRun(f) {
     a: skiAreaIds(f),
     ...(geom.lines ? { g: geom.lines } : { p: geom.rings }),
   };
+  const keys = cellsTouching(bboxOf(shapes));
+  if (keys.length > MAX_CELLS_PER_FEATURE) {
+    console.warn(`skipping run ${p.id}: spans ${keys.length} cells`);
+    return;
+  }
   counts.runsKept++;
-  for (const key of cellsTouching(bboxOf(shapes))) cellFor(key).runs.push(run);
+  for (const key of keys) cellFor(key).runs.push(run);
 }
 
 function onLift(f) {
   counts.lifts++;
   const p = f.properties;
-  if (p.status !== "operating") return;
+  if (p.status !== "operating" || !f.geometry) return;
   const geom = linesOf(f.geometry);
   if (!geom?.lines) return;
   const lift = { id: p.id, n: p.name, t: p.liftType, a: skiAreaIds(f), g: geom.lines };
+  const keys = cellsTouching(bboxOf(geom.lines));
+  if (keys.length > MAX_CELLS_PER_FEATURE) {
+    console.warn(`skipping lift ${p.id}: spans ${keys.length} cells`);
+    return;
+  }
   counts.liftsKept++;
-  for (const key of cellsTouching(bboxOf(geom.lines))) cellFor(key).lifts.push(lift);
+  for (const key of keys) cellFor(key).lifts.push(lift);
 }
 
 function onSkiArea(f) {

@@ -355,9 +355,10 @@ export default function Home() {
     if (result.kind === "resort") {
       // The index gives the resort's natural viewport: turn the frame to
       // its bearing (when the shape has one) and fit its padded bounds.
+      // Bearings run clockwise from north; our rotation is positive CCW.
       const nextRotation =
         shapeIsRotatable(shape) && result.bearing !== undefined
-          ? ((Math.round(result.bearing) % 360) + 360) % 360
+          ? ((Math.round(-result.bearing) % 360) + 360) % 360
           : rotation;
       setRotation(nextRotation);
       const [hW, hH] = shapeAABBHalf(shape, size.widthInches, size.heightInches, nextRotation);

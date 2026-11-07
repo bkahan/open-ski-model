@@ -89,18 +89,31 @@ export function dataBaseUrl(): string {
   return (process.env.SKI_DATA_BASE ?? DEFAULT_BASE).replace(/\/$/, "");
 }
 
+const CACHE_MAX_ENTRIES = 256;
 const cache = new Map<string, { at: number; value: Promise<unknown> }>();
 
 /** Fetch + parse once per URL per TTL; concurrent callers share the promise. */
 function cached<T>(url: string, load: () => Promise<T>): Promise<T> {
+  const now = Date.now();
   const hit = cache.get(url);
-  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value as Promise<T>;
-  const value = load().catch((err: unknown) => {
-    cache.delete(url);
+  if (hit && now - hit.at < CACHE_TTL_MS) return hit.value as Promise<T>;
+
+  for (const [k, v] of cache) {
+    if (now - v.at >= CACHE_TTL_MS) cache.delete(k);
+  }
+  while (cache.size >= CACHE_MAX_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+
+  const entry = { at: now, value: undefined as unknown as Promise<unknown> };
+  entry.value = load().catch((err: unknown) => {
+    if (cache.get(url) === entry) cache.delete(url);
     throw err;
   });
-  cache.set(url, { at: Date.now(), value });
-  return value;
+  cache.set(url, entry);
+  return entry.value as Promise<T>;
 }
 
 async function fetchBytes(url: string): Promise<ArrayBuffer | null> {

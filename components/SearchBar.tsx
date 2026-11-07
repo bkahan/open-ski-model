@@ -5,7 +5,7 @@
 // whole resort, and places from Nominatim for anything else (a summit, a
 // town). Nominatim's policy: identify the app, ~1 req/s, cache.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { SkiAreaHit } from "@/lib/resort/types";
 import type { Bbox, SearchResult } from "@/lib/types";
@@ -24,7 +24,6 @@ export default function SearchBar({ onSelect }: Props) {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
 
   // Below the minimum query length we just don't render any results — no
   // need to mirror that state in React (avoids setState-in-effect).
@@ -33,26 +32,31 @@ export default function SearchBar({ onSelect }: Props) {
   useEffect(() => {
     if (query.trim().length < MIN_QUERY_CHARS) return;
 
+    // Each source fails on its own: a Nominatim outage must not hide the
+    // resort index, and vice versa.
+    const ctrl = new AbortController();
     const timer = setTimeout(async () => {
-      abortRef.current?.abort();
-      const ctrl = new AbortController();
-      abortRef.current = ctrl;
       setLoading(true);
-      try {
-        const [resorts, places] = await Promise.all([
-          searchResorts(query, ctrl.signal),
-          searchPlaces(query, ctrl.signal),
-        ]);
-        setResults([...resorts, ...places]);
-        setOpen(true);
-      } catch (err) {
-        if (!ctrl.signal.aborted) console.error("[search]", err);
-      } finally {
-        if (abortRef.current === ctrl) setLoading(false);
-      }
+      const [resorts, places] = await Promise.all([
+        searchResorts(query, ctrl.signal).catch((err: unknown) => {
+          if (!ctrl.signal.aborted) console.warn("[search] resorts failed", err);
+          return [] as SearchResult[];
+        }),
+        searchPlaces(query, ctrl.signal).catch((err: unknown) => {
+          if (!ctrl.signal.aborted) console.warn("[search] places failed", err);
+          return [] as SearchResult[];
+        }),
+      ]);
+      if (ctrl.signal.aborted) return;
+      setResults([...resorts, ...places]);
+      setOpen(true);
+      setLoading(false);
     }, DEBOUNCE_MS);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      ctrl.abort();
+    };
   }, [query]);
 
   const resorts = visibleResults.filter((r) => r.kind === "resort");
