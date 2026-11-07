@@ -4,13 +4,10 @@
 
 import { NextResponse } from "next/server";
 
-import { buildOverpassQuery } from "@/lib/resort/overpass";
-
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
 const TIMEOUT_MS = 12_000;
-const BBOX: [number, number, number, number] = [-72.55, 44.9, -72.45, 44.96];
 
 interface Probe {
   name: string;
@@ -19,41 +16,36 @@ interface Probe {
 }
 
 export async function GET() {
-  const query = buildOverpassQuery(BBOX);
-  const tiny = "[out:json][timeout:5];node(44.93,-72.51,44.94,-72.50);out 1;";
   const ua = "open-ski-model-probe (https://github.com/bkahan/open-ski-model)";
 
-  const probes: Probe[] = [
-    { name: "egress example.com", url: "https://example.com/" },
-    { name: "status overpass-api.de", url: "https://overpass-api.de/api/status" },
-    { name: "status private.coffee", url: "https://overpass.private.coffee/api/status" },
-    {
-      name: "tiny GET overpass-api.de",
-      url: `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(tiny)}`,
-    },
-    {
-      name: "tiny GET private.coffee",
-      url: `https://overpass.private.coffee/api/interpreter?data=${encodeURIComponent(tiny)}`,
-    },
-    {
-      name: "full POST form overpass-api.de",
-      url: "https://overpass-api.de/api/interpreter",
-      init: {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": ua },
-        body: `data=${encodeURIComponent(query)}`,
-      },
-    },
-    {
-      name: "full POST raw private.coffee",
-      url: "https://overpass.private.coffee/api/interpreter",
-      init: { method: "POST", headers: { "User-Agent": ua }, body: query },
-    },
-    {
-      name: "full GET mail.ru",
-      url: `https://maps.mail.ru/osm/tools/overpass/api/interpreter?data=${encodeURIComponent(query)}`,
-    },
-  ];
+  const box = "44.9,-72.55,44.96,-72.45";
+  const q = (body: string) => `[out:json][timeout:10];${body}`;
+  const variants: Record<string, string> = {
+    tiny: q(`node(${box});out 1;`),
+    pisteOnly: q(`way["piste:type"="downhill"](${box});out tags geom;`),
+    liftOnly: q(`way["aerialway"](${box});out tags geom;`),
+    liftKeyed: q(`way["aerialway"~"^(chair_lift|gondola|cable_car|mixed_lift|drag_lift|t-bar|j-bar|platter|rope_tow|magic_carpet)$"](${box});out tags geom;`),
+    pisteIds: q(`way["piste:type"="downhill"](${box});out ids;`),
+    globalBbox: `[out:json][timeout:10][bbox:${box}];way["piste:type"="downhill"];out tags geom;`,
+  };
+  const hosts: Record<string, string> = {
+    de: "https://overpass-api.de/api/interpreter",
+    coffee: "https://overpass.private.coffee/api/interpreter",
+  };
+  const probes: Probe[] = [];
+  for (const [hostName, url] of Object.entries(hosts)) {
+    for (const [name, data] of Object.entries(variants)) {
+      probes.push({
+        name: `${name} ${hostName}`,
+        url,
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": ua },
+          body: `data=${encodeURIComponent(data)}`,
+        },
+      });
+    }
+  }
 
   const results = await Promise.all(
     probes.map(async (p) => {
