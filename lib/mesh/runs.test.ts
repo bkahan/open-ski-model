@@ -41,8 +41,9 @@ function spec(resort: ResortData, overrides: Partial<RunMeshSpec> = {}): RunMesh
 }
 
 const centerRun = {
-  id: 1,
+  id: "1",
   difficulty: "easy" as const,
+  convention: "north_america" as const,
   coords: [
     [-72.51, 44.93],
     [-72.49, 44.93],
@@ -55,13 +56,14 @@ describe("buildRunRibbons", () => {
     const resort: ResortData = {
       runs: [
         centerRun,
-        { ...centerRun, id: 2, difficulty: "intermediate" },
-        { ...centerRun, id: 3, difficulty: "expert" },
-        { ...centerRun, id: 4, difficulty: "advanced" },
+        { ...centerRun, id: "2", difficulty: "intermediate" },
+        { ...centerRun, id: "3", difficulty: "expert" },
+        { ...centerRun, id: "4", difficulty: "advanced" },
       ],
-      lifts: [{ id: 9, type: "chair_lift", coords: centerRun.coords }],
+      lifts: [{ id: "9", type: "chair_lift", coords: centerRun.coords }],
       bbox,
       extent: bbox,
+      convention: "north_america",
     };
     const groups = buildRunRibbons(spec(resort));
     const byName = Object.fromEntries(groups.map((g) => [g.name, g]));
@@ -75,7 +77,7 @@ describe("buildRunRibbons", () => {
   });
 
   it("widens narrow runs to the minimum printable width", () => {
-    const resort: ResortData = { runs: [centerRun], lifts: [], bbox, extent: bbox };
+    const resort: ResortData = { runs: [centerRun], lifts: [], bbox, extent: bbox, convention: "north_america" };
     const [green] = buildRunRibbons(spec(resort, { minWidthMm: 2.54 }));
     const positions = green.vertexData.positions as Float32Array;
     // First cross-section: left and right vertices straddle the centerline
@@ -87,7 +89,7 @@ describe("buildRunRibbons", () => {
   it("drops lifts when disabled and runs outside the footprint", () => {
     const outside = {
       ...centerRun,
-      id: 5,
+      id: "5",
       coords: [
         [-72.6, 44.8],
         [-72.59, 44.8],
@@ -95,9 +97,10 @@ describe("buildRunRibbons", () => {
     };
     const resort: ResortData = {
       runs: [outside],
-      lifts: [{ id: 9, type: "gondola", coords: centerRun.coords }],
+      lifts: [{ id: "9", type: "gondola", coords: centerRun.coords }],
       bbox,
       extent: bbox,
+      convention: "north_america",
     };
     expect(buildRunRibbons(spec(resort, { showLifts: false }))).toEqual([]);
     expect(buildRunRibbons(spec(resort)).map((g) => g.name)).toEqual(["lift"]);
@@ -111,7 +114,7 @@ describe("buildRunRibbons", () => {
         [-72.47, 44.91],
       ] as [number, number][],
     };
-    const resort: ResortData = { runs: [crossing], lifts: [], bbox, extent: bbox };
+    const resort: ResortData = { runs: [crossing], lifts: [], bbox, extent: bbox, convention: "north_america" };
     const [green] = buildRunRibbons(spec(resort, { shape: "circle" }));
     const positions = green.vertexData.positions as Float32Array;
     const r = 3;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MAX_BBOX_DEG, parseResortRequest, snapBboxOutward } from "./request";
+import { MAX_BBOX_DEG, parseResortRequest } from "./request";
 
 describe("parseResortRequest", () => {
   it("accepts a valid bbox", () => {
@@ -20,19 +20,5 @@ describe("parseResortRequest", () => {
     [{ bbox: [0, 0, MAX_BBOX_DEG + 0.1, 0.1] }, `bbox too large (max ${MAX_BBOX_DEG}° per side)`],
   ])("rejects %j", (input, message) => {
     expect(parseResortRequest(input)).toBe(message);
-  });
-});
-
-describe("snapBboxOutward", () => {
-  it("expands to the enclosing grid cells", () => {
-    expect(snapBboxOutward([-72.5349, 44.9101, -72.4651, 44.9499], 0.01)).toEqual([
-      -72.54, 44.91, -72.46, 44.95,
-    ]);
-  });
-
-  it("leaves aligned corners alone", () => {
-    expect(snapBboxOutward([-72.54, 44.91, -72.46, 44.95], 0.01)).toEqual([
-      -72.54, 44.91, -72.46, 44.95,
-    ]);
   });
 });

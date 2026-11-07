@@ -6,9 +6,6 @@ import type { Bbox } from "@/lib/types";
 /** Per-side cap on the fetch area, in degrees. Mirrored in app/page.tsx. */
 export const MAX_BBOX_DEG = 0.5;
 
-/** Grid the bbox is snapped to before fetching, so nearby frames share a call. */
-export const SNAP_DEG = 0.01;
-
 export function parseResortRequest(input: unknown): Bbox | string {
   if (typeof input !== "object" || input === null) return "body must be an object";
   const b = input as Record<string, unknown>;
@@ -25,14 +22,4 @@ export function parseResortRequest(input: unknown): Bbox | string {
     return `bbox too large (max ${MAX_BBOX_DEG}° per side)`;
   }
   return [w, s, e, n];
-}
-
-/** Expand a bbox to the enclosing cell corners of a `step`-degree grid. */
-export function snapBboxOutward(b: Bbox, step: number = SNAP_DEG): Bbox {
-  // The epsilon keeps 44.95 / 0.01 = 4495.0000000001 from snapping a
-  // whole cell outward.
-  const eps = 1e-9;
-  const down = (v: number) => Number((Math.floor(v / step + eps) * step).toFixed(6));
-  const up = (v: number) => Number((Math.ceil(v / step - eps) * step).toFixed(6));
-  return [down(b[0]), down(b[1]), up(b[2]), up(b[3])];
 }

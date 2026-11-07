@@ -3,7 +3,7 @@
 // Europe reads blue / red / black. "auto" picks by longitude.
 
 import type { Bbox } from "@/lib/types";
-import type { LiftType, RunDifficulty } from "./types";
+import type { LiftType, RunConvention, RunDifficulty } from "./types";
 
 export type ColorScheme = "na" | "eu";
 export type ColorSchemeSetting = "auto" | ColorScheme;
@@ -70,6 +70,20 @@ export function colorSchemeForBbox(bbox: Bbox): ColorScheme {
   return lng < -30 ? "na" : "eu";
 }
 
-export function resolveColorScheme(setting: ColorSchemeSetting, bbox: Bbox): ColorScheme {
-  return setting === "auto" ? colorSchemeForBbox(bbox) : setting;
+/** Japan marks trails like Europe (blue/red/black). */
+export function colorSchemeForConvention(convention: RunConvention): ColorScheme {
+  return convention === "north_america" ? "na" : "eu";
+}
+
+/**
+ * "auto" prefers the convention the data was tagged under, and falls back
+ * to the hemisphere when there are no runs to tell from.
+ */
+export function resolveColorScheme(
+  setting: ColorSchemeSetting,
+  bbox: Bbox,
+  convention: RunConvention | null = null,
+): ColorScheme {
+  if (setting !== "auto") return setting;
+  return convention ? colorSchemeForConvention(convention) : colorSchemeForBbox(bbox);
 }
