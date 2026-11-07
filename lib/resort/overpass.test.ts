@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildOverpassQuery, parseOverpass, type OverpassElement } from "./overpass";
+import { buildOverpassQuery, overpassEndpoints, parseOverpass, type OverpassElement } from "./overpass";
 
 const bbox: [number, number, number, number] = [-72.55, 44.9, -72.45, 44.96];
 
@@ -121,5 +121,30 @@ describe("buildOverpassQuery", () => {
     expect(q).toContain('["piste:type"="downhill"]');
     expect(q).toContain('["aerialway"]');
     expect(q).toContain("out tags geom");
+  });
+});
+
+describe("overpassEndpoints", () => {
+  it("puts a configured OVERPASS_URL first and keeps the public mirrors as fallback", () => {
+    const prev = process.env.OVERPASS_URL;
+    process.env.OVERPASS_URL = "https://overpass.example.com/api/interpreter";
+    try {
+      const urls = overpassEndpoints();
+      expect(urls[0]).toBe("https://overpass.example.com/api/interpreter");
+      expect(urls.length).toBeGreaterThan(1);
+    } finally {
+      if (prev === undefined) delete process.env.OVERPASS_URL;
+      else process.env.OVERPASS_URL = prev;
+    }
+  });
+
+  it("uses only public mirrors when nothing is configured", () => {
+    const prev = process.env.OVERPASS_URL;
+    delete process.env.OVERPASS_URL;
+    try {
+      expect(overpassEndpoints().every((u) => u.startsWith("https://"))).toBe(true);
+    } finally {
+      if (prev !== undefined) process.env.OVERPASS_URL = prev;
+    }
   });
 });

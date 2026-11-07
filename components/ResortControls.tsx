@@ -26,6 +26,7 @@ interface Props {
   resort: ResortData | null;
   loading: boolean;
   error: string | null;
+  onRetry: () => void;
   /** The scheme in effect once "auto" is resolved against the bbox. */
   resolvedScheme: ColorScheme;
 }
@@ -42,6 +43,7 @@ export default function ResortControls({
   resort,
   loading,
   error,
+  onRetry,
   resolvedScheme,
 }: Props) {
   const set = <K extends keyof ResortSettings>(key: K, value: ResortSettings[K]) =>
@@ -149,7 +151,14 @@ export default function ResortControls({
           {loading
             ? "loading runs…"
             : error
-              ? <span className="text-red-300 font-sans">{error}</span>
+              ? (
+                <span className="font-sans">
+                  <span className="text-red-300">{error}</span>{" "}
+                  <button type="button" onClick={onRetry} className="text-amber-300 underline">
+                    retry
+                  </button>
+                </span>
+              )
               : resort
                 ? `${resort.runs.length} runs · ${resort.lifts.length} lifts`
                 : "—"}

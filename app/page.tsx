@@ -591,6 +591,9 @@ export default function Home() {
           resort={resort}
           loading={resortLoading}
           error={resortError}
+          onRetry={() => {
+            if (bbox) void loadResort(resortFetchArea(bbox));
+          }}
           resolvedScheme={resolvedScheme}
         />
 
