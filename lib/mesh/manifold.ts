@@ -18,11 +18,17 @@ const WASM_URL = "/manifold.wasm";
 
 export async function loadManifold(): Promise<ManifoldToplevel> {
   if (!toplevel) {
-    toplevel = import("manifold-3d").then(async ({ default: Module }) => {
-      const wasm = await Module({ locateFile: () => WASM_URL });
-      wasm.setup();
-      return wasm;
-    });
+    toplevel = import("manifold-3d")
+      .then(async ({ default: Module }) => {
+        const wasm = await Module({ locateFile: () => WASM_URL });
+        wasm.setup();
+        return wasm;
+      })
+      .catch((err: unknown) => {
+        // Don't pin a failed load; the next call retries.
+        toplevel = null;
+        throw err;
+      });
   }
   return toplevel;
 }

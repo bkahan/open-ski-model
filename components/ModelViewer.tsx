@@ -26,6 +26,7 @@ import {
   VertexBuffer,
 } from "@babylonjs/core";
 import { STLExport } from "@babylonjs/serializers/stl";
+import type { Manifold } from "manifold-3d";
 import type * as opentype from "opentype.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -276,6 +277,7 @@ async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravin
     const host = newPlinth ?? plinthMesh ?? terrainMesh;
     try {
       const engraved = await engraveBrandOnBottom(scene, font, host, rotation, {
+        isTerrain: host === terrainMesh,
         terrainBaseY: baseThicknessInches,
       });
       if (engraved) {
@@ -304,39 +306,52 @@ async function engraveBrandOnBottom(
   font: opentype.Font,
   host: Mesh,
   rotationDeg: number,
-  opts: { terrainBaseY: number },
+  opts: { isTerrain: boolean; terrainBaseY: number },
 ): Promise<Mesh | null> {
   const positions = host.getVerticesData(VertexBuffer.PositionKind);
   const indices = host.getIndices();
   if (!positions || !indices) return null;
 
   const m = await loadManifold();
-  const text = buildTextSolid(m, font, BRAND_TEXT, BRAND_CAP_HEIGHT_IN, ENGRAVE_DEPTH_IN + BRAND_OVERCUT_IN);
-  if (!text) return null;
   const width = measureTextWidth(font, BRAND_TEXT, BRAND_CAP_HEIGHT_IN);
 
-  // Text is built in XY, extruded along +Z. Lay it into the XZ plane
-  // pointing up into the body (y from -overcut to +depth), with the
-  // glyph y axis mapped to -z so it mirrors for reading from below.
-  const placed = text
-    .translate([-width / 2, -BRAND_CAP_HEIGHT_IN / 2, -BRAND_OVERCUT_IN])
-    .rotate([-90, 0, 0])
-    .rotate([0, rotationDeg, 0]);
-  const solid = manifoldFromMesh(m, { positions, indices });
-  const cut = m.Manifold.difference(solid, placed);
-  return withSolids([text, placed, solid, cut], () => {
+  // Every Manifold lives in WASM memory; collect them so a throw on any
+  // step still frees the ones made before it.
+  const solids: Manifold[] = [];
+  const keep = <T extends Manifold>(s: T): T => {
+    solids.push(s);
+    return s;
+  };
+  return withSolids(solids, () => {
+    const text = buildTextSolid(m, font, BRAND_TEXT, BRAND_CAP_HEIGHT_IN, ENGRAVE_DEPTH_IN + BRAND_OVERCUT_IN);
+    if (!text) return null;
+    keep(text);
+
+    // Text is built in XY, extruded along +Z. Lay it into the XZ plane
+    // pointing up into the body (y from -overcut to +depth), with the
+    // glyph y axis mapped to -z so it mirrors for reading from below.
+    const centered = keep(text.translate([-width / 2, -BRAND_CAP_HEIGHT_IN / 2, -BRAND_OVERCUT_IN]));
+    const laidFlat = keep(centered.rotate([-90, 0, 0]));
+    const placed = keep(laidFlat.rotate([0, rotationDeg, 0]));
+    const solid = keep(manifoldFromMesh(m, { positions, indices }));
+    const cut = keep(m.Manifold.difference(solid, placed));
     if (cut.status() !== "NoError" || cut.numTri() === 0) {
       console.warn("[engraving] brand difference failed:", cut.status());
       return null;
     }
-    // Manifold output carries no colors; re-paint the terrain surface by
-    // height and everything else (walls, bottom, pockets) in base color.
-    const topY = host.getBoundingInfo().boundingBox.maximumWorld.y;
-    const span = Math.max(topY - opts.terrainBaseY, 1e-6);
-    const colorAt: ColorAt = (_x, y, _z, ny) =>
-      ny > 0.3 && y > opts.terrainBaseY - 1e-4
-        ? DEFAULT_PALETTE.surface((y - opts.terrainBaseY) / span)
-        : DEFAULT_PALETTE.base;
+
+    // Manifold output carries no colors. The terrain is re-painted by
+    // height (walls, bottom and pockets in base color); the plinth has
+    // no vertex colors and keeps its material.
+    let colorAt: ColorAt | undefined;
+    if (opts.isTerrain) {
+      const topY = host.getBoundingInfo().boundingBox.maximum.y;
+      const span = Math.max(topY - opts.terrainBaseY, 1e-6);
+      colorAt = (_x, y, _z, ny) =>
+        ny > 0.3 && y > opts.terrainBaseY - 1e-4
+          ? DEFAULT_PALETTE.surface((y - opts.terrainBaseY) / span)
+          : DEFAULT_PALETTE.base;
+    }
     const mesh = new Mesh(host.name + "-engraved", scene);
     vertexDataFromManifold(cut, colorAt).applyToMesh(mesh, true);
     mesh.material = host.material;
