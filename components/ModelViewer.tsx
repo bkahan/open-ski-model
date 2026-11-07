@@ -32,10 +32,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { buildWatertight, buildShapedWatertight } from "@/lib/mesh/watertight";
 import { buildContourLines } from "@/lib/mesh/contours";
 import { buildPlinth } from "@/lib/mesh/plinth";
+import { buildRunRibbons } from "@/lib/mesh/runs";
 import { exportToStep } from "@/lib/mesh/step-export";
 import { buildTextMesh, loadFont, measureTextWidth } from "@/lib/mesh/text";
 import { buildCompassArrow } from "@/lib/mesh/compass";
 import type { ElevationResponse } from "@/lib/elevation/types";
+import type { ColorScheme } from "@/lib/resort/colors";
+import type { ResortData } from "@/lib/resort/types";
 import {
   pointInShape,
   shapeAABBHalf,
@@ -57,7 +60,14 @@ interface Props {
   engraveLabel: boolean;
   engraveBrand: boolean;
   label?: string;
+  /** Runs + lifts to drape on the terrain; null draws none. */
+  resort: ResortData | null;
+  colorScheme: ColorScheme;
+  showLifts: boolean;
+  minRunWidthMm: number;
 }
+
+const RIBBON_LIFT_IN = 0.008;
 
 const BEVEL_DEG = 35;
 const BRAND_TEXT = "craftedcarving.com";
@@ -324,6 +334,10 @@ export default function ModelViewer({
   engraveLabel,
   engraveBrand,
   label,
+  resort,
+  colorScheme,
+  showLifts,
+  minRunWidthMm,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const engineRef = useRef<Engine | null>(null);
@@ -331,6 +345,7 @@ export default function ModelViewer({
   const terrainRef = useRef<Mesh | null>(null);
   const plinthRef = useRef<Mesh | null>(null);
   const contoursRef = useRef<Mesh | null>(null);
+  const ribbonsRef = useRef<Mesh[]>([]);
   const engravingFallbackRef = useRef<Mesh[]>([]);
   const terrainMatRef = useRef<StandardMaterial | null>(null);
   const plinthMatRef = useRef<StandardMaterial | null>(null);
@@ -414,6 +429,7 @@ export default function ModelViewer({
       terrainRef.current = null;
       plinthRef.current = null;
       contoursRef.current = null;
+      ribbonsRef.current = [];
       engravingFallbackRef.current = [];
       lightRef.current = null;
     };
@@ -617,6 +633,66 @@ export default function ModelViewer({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label]);
+
+  // --- 2b. Runs + lifts draped on the terrain ---
+  // Separate from the terrain rebuild so toggling lifts or changing the
+  // width doesn't redo the (slow) CSG engraving. One mesh per color.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    for (const m of ribbonsRef.current) {
+      m.material?.dispose();
+      m.dispose();
+    }
+    ribbonsRef.current = [];
+    if (!resort) return;
+
+    const groups = buildRunRibbons({
+      bbox,
+      data,
+      shape,
+      widthInches,
+      heightInches,
+      rotation,
+      baseThicknessInches,
+      verticalExaggeration,
+      resort,
+      scheme: colorScheme,
+      showLifts,
+      minWidthMm: minRunWidthMm,
+      lift: RIBBON_LIFT_IN,
+    });
+
+    const yOffset = engraveLabel ? baseThicknessInches : 0;
+    ribbonsRef.current = groups.map((g) => {
+      const mat = new StandardMaterial(`run-${g.name}`, scene);
+      mat.diffuseColor = new Color3(...g.rgb);
+      mat.emissiveColor = new Color3(g.rgb[0] * 0.25, g.rgb[1] * 0.25, g.rgb[2] * 0.25);
+      mat.specularColor = new Color3(0.05, 0.05, 0.05);
+      mat.backFaceCulling = false;
+      const mesh = new Mesh(`runs-${g.name}`, scene);
+      g.vertexData.applyToMesh(mesh, false);
+      mesh.material = mat;
+      mesh.position.y = yOffset;
+      mesh.isPickable = false;
+      return mesh;
+    });
+  }, [
+    bbox,
+    data,
+    shape,
+    widthInches,
+    heightInches,
+    rotation,
+    baseThicknessInches,
+    verticalExaggeration,
+    engraveLabel,
+    resort,
+    colorScheme,
+    showLifts,
+    minRunWidthMm,
+  ]);
 
   // --- 3. Toggle contour visibility without rebuilding ---
   useEffect(() => {

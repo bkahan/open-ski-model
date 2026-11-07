@@ -64,9 +64,19 @@ box, get a watertight `.stl` you can hand to your slicer.
   is wrapped as a single `MANIFOLD_SOLID_BREP`. Fusion / SolidWorks /
   FreeCAD open it as one selectable object. Units are declared as mm.
 
+- **Ski runs and lifts.** Downhill pistes and lifts come from
+  OpenStreetMap (Overpass) and are drawn on the map and draped on the 3D
+  terrain, colored by difficulty. Searching a resort auto-frames the
+  bbox around its runs. Trail colors follow the North American
+  (green / blue / black) or European (blue / red / black) convention,
+  picked by hemisphere or set by hand. Lifts are a toggle; runs narrower
+  than the adjustable minimum width (1.2 mm) are widened so they print.
+  Multicolor inlay bodies and 3MF export are next — see
+  `docs/roadmap.md`.
+
 - **Share-by-URL.** Every change to the bbox / shape / rotation / size /
-  density / engraving toggles / exaggeration is mirrored to the URL, so
-  a deep link reopens the same model.
+  density / engraving toggles / exaggeration / run settings is mirrored
+  to the URL, so a deep link reopens the same model.
 - **Installable PWA.** Manifest + service worker (Serwist). App shell and
   static assets cache; map tiles cached opportunistically.
 
@@ -77,6 +87,7 @@ box, get a watertight `.stl` you can hand to your slicer.
 echo 'NEXT_PUBLIC_MAPTILER_KEY=your_key_here' > .env.local
 npm install
 npm run dev
+npm test      # unit tests (Vitest)
 ```
 
 Open <http://localhost:3000>.
@@ -171,6 +182,10 @@ are fused in by position dedup so the export stays a single solid.
 | `eb`    | `0` to disable the bottom brand engraving (on by default) |
 | `t`     | base thickness, inches                                 |
 | `v`     | vertical exaggeration                                  |
+| `runs`  | `0` to hide ski runs (on by default)                   |
+| `lf`    | `0` to hide lifts (on by default)                      |
+| `mw`    | minimum run width in mm (omitted at the default 1.2)   |
+| `cs`    | trail color scheme `na` \| `eu` (omitted when auto)    |
 | `label` | display name (URL-encoded)                             |
 
 Example:
@@ -186,6 +201,7 @@ The page reads this on mount and rebuilds the picker / model spec.
 ```
 app/
   api/elevation/route.ts   POST handler (dispatch terrarium / USGS)
+  api/resort/route.ts      POST handler (runs + lifts via Overpass)
   layout.tsx               Root + RegisterSW + metadata
   not-found.tsx            404 page (required by Next 16 at build time)
   page.tsx                 Map ↔ viewer state machine
@@ -198,6 +214,7 @@ components/
   SizeControls.tsx         Print-size + exaggeration inputs
   DensityControls.tsx      Mesh-density preset + custom slider
   EngravingControls.tsx    Label/compass + brand toggles
+  ResortControls.tsx       Runs / lifts / min width / color scheme
   RegisterSW.tsx           Service-worker registration
 lib/
   bbox.ts                  Bbox math (small-angle approx)
@@ -206,8 +223,15 @@ lib/
     terrarium.ts           Tile math + PNG decoding (server)
     usgs.ts                3DEP exportImage + GeoTIFF parsing (server)
     types.ts               Request/response types
+  resort/
+    overpass.ts            Overpass query + response parsing (server)
+    colors.ts              Difficulty → color per scheme
+    geojson.ts             Resort data → GeoJSON for the map
+    settings.ts            Run settings defaults + limits
+    types.ts               Run / lift / response types
   mesh/
     watertight.ts          Build closed VertexData from height grid
+    runs.ts                Drape runs + lifts as ribbons, one per color
     contours.ts            Marching squares contour lines
     plinth.ts              Beveled plinth around the model
     compass.ts             North-arrow indicator geometry

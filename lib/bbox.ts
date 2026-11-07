@@ -69,6 +69,31 @@ export function clampBbox(b: Bbox): Bbox {
   ];
 }
 
+/** True when `inner` lies entirely within `outer`. */
+export function bboxContains(outer: Bbox, inner: Bbox): boolean {
+  return (
+    inner[0] >= outer[0] &&
+    inner[1] >= outer[1] &&
+    inner[2] <= outer[2] &&
+    inner[3] <= outer[3]
+  );
+}
+
+/** Scale a bbox about its center. `factor` 1.5 makes each side 1.5× longer. */
+export function scaleBbox(b: Bbox, factor: number): Bbox {
+  const [cx, cy] = bboxCenter(b);
+  const hw = ((b[2] - b[0]) / 2) * factor;
+  const hh = ((b[3] - b[1]) / 2) * factor;
+  return clampBbox([cx - hw, cy - hh, cx + hw, cy + hh]);
+}
+
+/** Grow a bbox so neither side is shorter than `minMeters`. */
+export function ensureBboxMinSize(b: Bbox, minMeters: number): Bbox {
+  const w = Math.max(bboxWidthMeters(b), minMeters);
+  const h = Math.max(bboxHeightMeters(b), minMeters);
+  return bboxFromCenterWH(bboxCenter(b), w, h);
+}
+
 /**
  * Given a Nominatim bounding box (often very loose), expand it to the desired
  * aspect and a sensible default size, while keeping it centered on the result.

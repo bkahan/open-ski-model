@@ -20,10 +20,17 @@
 //       · Drag the perimeter handle (circle / hex) → change diameter.
 //       · Drag the rotation handle → rotate around center.
 
-import maplibregl, { type Map as MlMap } from "maplibre-gl";
+import maplibregl, { type GeoJSONSource, type Map as MlMap } from "maplibre-gl";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { bboxCenter, bboxWidthMeters, metersPerDegLng } from "@/lib/bbox";
+import type { ColorScheme } from "@/lib/resort/colors";
+import {
+  EMPTY_RESORT_GEOJSON,
+  resortToGeoJSON,
+  type ResortFeatureCollection,
+} from "@/lib/resort/geojson";
+import type { ResortData } from "@/lib/resort/types";
 import { shapeAABBHalf, shapeIsRotatable, type Shape } from "@/lib/shape";
 import type { Bbox, LngLat } from "@/lib/types";
 
@@ -31,6 +38,10 @@ const METERS_PER_DEG_LAT = 111_320;
 
 /** Pixel margin from shape edge to the rotation handle. */
 const ROTATION_HANDLE_OFFSET_PX = 28;
+
+const RESORT_SOURCE = "resort";
+const RUN_LAYER = "resort-runs";
+const LIFT_LAYER = "resort-lifts";
 
 interface Props {
   bbox: Bbox | null;
@@ -46,6 +57,10 @@ interface Props {
   onResize: (widthInches: number, heightInches: number) => void;
   onRotationChange: (rotationDeg: number) => void;
   flyTo?: LngLat | null;
+  /** Runs and lifts to draw under the shape overlay; null hides the layer. */
+  resort: ResortData | null;
+  colorScheme: ColorScheme;
+  showLifts: boolean;
 }
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY ?? "";
@@ -98,6 +113,36 @@ function localToGeo(
   return [center[0] + dLng, center[1] + dLat];
 }
 
+/** Add the resort source + layers once; later calls are no-ops. */
+function ensureResortLayers(map: MlMap) {
+  if (map.getSource(RESORT_SOURCE)) return;
+  map.addSource(RESORT_SOURCE, { type: "geojson", data: EMPTY_RESORT_GEOJSON });
+  map.addLayer({
+    id: LIFT_LAYER,
+    type: "line",
+    source: RESORT_SOURCE,
+    filter: ["==", ["get", "kind"], "lift"],
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": ["get", "color"],
+      "line-width": 2,
+      "line-dasharray": [2, 1.5],
+    },
+  });
+  map.addLayer({
+    id: RUN_LAYER,
+    type: "line",
+    source: RESORT_SOURCE,
+    filter: ["==", ["get", "kind"], "run"],
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": ["get", "color"],
+      "line-width": 3,
+      "line-opacity": 0.9,
+    },
+  });
+}
+
 /** Convert window-relative pointer coords to map-container-relative px. */
 function cursorContainerPx(
   e: PointerEvent,
@@ -138,6 +183,9 @@ export default function MapPicker({
   onResize,
   onRotationChange,
   flyTo,
+  resort,
+  colorScheme,
+  showLifts,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -371,6 +419,29 @@ export default function MapPicker({
     if (!map || !flyTo) return;
     map.flyTo({ center: flyTo, zoom: Math.max(map.getZoom(), 12), duration: 800 });
   }, [flyTo]);
+
+  // --- 2b. Runs + lifts layer ---
+  // The style loads asynchronously; if it isn't ready yet, apply on the
+  // next idle instead of racing addSource.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const geojson: ResortFeatureCollection = resort
+      ? resortToGeoJSON(resort, colorScheme, showLifts)
+      : EMPTY_RESORT_GEOJSON;
+    const apply = () => {
+      ensureResortLayers(map);
+      map.getSource<GeoJSONSource>(RESORT_SOURCE)?.setData(geojson);
+    };
+    if (map.isStyleLoaded()) {
+      apply();
+      return;
+    }
+    map.once("idle", apply);
+    return () => {
+      map.off("idle", apply);
+    };
+  }, [resort, colorScheme, showLifts]);
 
   // --- 3. Drag-to-move: dragging the shape's interior ---
   useEffect(() => {

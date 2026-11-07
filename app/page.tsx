@@ -18,23 +18,34 @@
 //     same view.
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import DensityControls from "@/components/DensityControls";
 import EngravingControls from "@/components/EngravingControls";
+import ResortControls from "@/components/ResortControls";
 import SearchBar from "@/components/SearchBar";
 import ShapeControls from "@/components/ShapeControls";
 import SizeControls, { type SizeState } from "@/components/SizeControls";
 import {
   bboxCenter,
+  bboxContains,
   bboxFromCenterWH,
   bboxWidthMeters,
+  ensureBboxMinSize,
+  scaleBbox,
   snapBboxToAspect,
 } from "@/lib/bbox";
 import type {
   ElevationRequest,
   ElevationResponse,
 } from "@/lib/elevation/types";
+import { resolveColorScheme } from "@/lib/resort/colors";
+import {
+  clampRunWidth,
+  DEFAULT_RESORT_SETTINGS,
+  type ResortSettings,
+} from "@/lib/resort/settings";
+import type { ResortData, ResortRequest } from "@/lib/resort/types";
 import {
   HEX_FLAT_TO_LONG,
   shapeAABBHalf,
@@ -67,7 +78,40 @@ const DEFAULT_GRID_SIZE = 256;
 const MIN_GRID_SIZE = 64;
 const MAX_GRID_SIZE = 2048;
 
+// Resort data is fetched for an area larger than the frame so small drags
+// reuse it; a search looks wider still, since Nominatim's bbox for a
+// summit is a point.
+const RESORT_FETCH_SCALE = 1.6;
+const RESORT_SEARCH_MIN_METERS = 8_000;
+const RESORT_FRAME_PADDING = 1.08;
+const RESORT_FRAME_MIN_RUNS = 3;
+const RESORT_FETCH_DEBOUNCE_MS = 700;
+/** Mirrors the server cap in /api/resort. */
+const RESORT_MAX_FETCH_DEG = 0.5;
+
 type View = "map" | "loading" | "viewer";
+
+/** Area to fetch for a frame: padded for drag headroom, unless padding would exceed the API cap. */
+function resortFetchArea(bbox: Bbox): Bbox {
+  const scaled = scaleBbox(bbox, RESORT_FETCH_SCALE);
+  const tooBig = scaled[2] - scaled[0] > RESORT_MAX_FETCH_DEG || scaled[3] - scaled[1] > RESORT_MAX_FETCH_DEG;
+  return tooBig ? bbox : scaled;
+}
+
+async function fetchResort(bbox: Bbox, signal?: AbortSignal): Promise<ResortData> {
+  const payload: ResortRequest = { bbox };
+  const res = await fetch("/api/resort", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return (await res.json()) as ResortData;
+}
 
 interface ViewerSnapshot {
   bbox: Bbox;
@@ -132,6 +176,11 @@ export default function Home() {
   const [view, setView] = useState<View>("map");
   const [snapshot, setSnapshot] = useState<ViewerSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [resortSettings, setResortSettings] = useState<ResortSettings>(DEFAULT_RESORT_SETTINGS);
+  const [resort, setResort] = useState<ResortData | null>(null);
+  const [resortLoading, setResortLoading] = useState(false);
+  const [resortError, setResortError] = useState<string | null>(null);
+  const resortAbortRef = useRef<AbortController | null>(null);
   const didHydrateFromUrl = useRef(false);
 
   // --- Hydrate from URL on mount ---
@@ -167,6 +216,12 @@ export default function Home() {
     setGridSize(nextGridSize);
     setEngraveLabel(parsed.engraveLabel ?? false);
     setEngraveBrand(parsed.engraveBrand ?? true);
+    setResortSettings({
+      showRuns: parsed.showRuns ?? DEFAULT_RESORT_SETTINGS.showRuns,
+      showLifts: parsed.showLifts ?? DEFAULT_RESORT_SETTINGS.showLifts,
+      minRunWidthMm: clampRunWidth(parsed.minRunWidthMm ?? DEFAULT_RESORT_SETTINGS.minRunWidthMm),
+      colorScheme: parsed.colorScheme ?? DEFAULT_RESORT_SETTINGS.colorScheme,
+    });
     setLabel(parsed.label ?? "Jay Peak");
     const nextBbox = parsed.bbox
       ?? bboxForShape(
@@ -197,11 +252,65 @@ export default function Home() {
         gridSize,
         engraveLabel,
         engraveBrand,
+        ...resortSettings,
         label,
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [bbox, shape, rotation, size, gridSize, engraveLabel, engraveBrand, label]);
+  }, [bbox, shape, rotation, size, gridSize, engraveLabel, engraveBrand, resortSettings, label]);
+
+  /** Fetch runs + lifts for `area`, replacing any in-flight request. */
+  const loadResort = useCallback(async (area: Bbox): Promise<ResortData | null> => {
+    resortAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    resortAbortRef.current = ctrl;
+    setResortLoading(true);
+    setResortError(null);
+    try {
+      const data = await fetchResort(area, ctrl.signal);
+      if (ctrl.signal.aborted) return null;
+      setResort(data);
+      return data;
+    } catch (err) {
+      if (ctrl.signal.aborted) return null;
+      console.error("[resort]", err);
+      setResortError(err instanceof Error ? err.message : "resort lookup failed");
+      return null;
+    } finally {
+      if (resortAbortRef.current === ctrl) setResortLoading(false);
+    }
+  }, []);
+
+  useEffect(() => () => resortAbortRef.current?.abort(), []);
+
+  // --- Keep resort data covering the current frame ---
+  // Waits for any in-flight load rather than replacing it: a search
+  // moves the frame and then fetches, and this must not abort that.
+  // When the load lands, `resort` changes and this re-checks coverage.
+  // One attempt per frame: a failed lookup shows its error and waits for
+  // the user to move the frame, rather than hammering Overpass.
+  const attemptedBboxRef = useRef<Bbox | null>(null);
+  useEffect(() => {
+    if (!bbox || !resortSettings.showRuns || resortLoading) return;
+    if (resort && bboxContains(resort.bbox, bbox)) return;
+    if (attemptedBboxRef.current === bbox) return;
+    const timer = setTimeout(() => {
+      attemptedBboxRef.current = bbox;
+      void loadResort(resortFetchArea(bbox));
+    }, RESORT_FETCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [bbox, resort, resortLoading, resortSettings.showRuns, loadResort]);
+
+  // Latest bbox for async handlers that must not clobber newer edits.
+  const bboxRef = useRef<Bbox | null>(bbox);
+  useEffect(() => {
+    bboxRef.current = bbox;
+  }, [bbox]);
+
+  const resolvedScheme = useMemo(
+    () => resolveColorScheme(resortSettings.colorScheme, bbox ?? [0, 0, 0, 0]),
+    [resortSettings.colorScheme, bbox],
+  );
 
   // All bbox refits are done inside the explicit handlers (handleShapeChange,
   // handleSizeChange, etc.) since they already know the old state. We
@@ -219,10 +328,33 @@ export default function Home() {
     return hW / hH;
   }, [shape, size.widthInches, size.heightInches, rotation]);
 
+  /**
+   * Auto-frame: look for runs around a search result and fit the frame
+   * to them. Keeps the center-on-result frame when the area has none, or
+   * when the user has moved the frame while the lookup was running.
+   */
+  const autoFrameResort = async (result: SearchResult, initialBbox: Bbox) => {
+    const searchArea = ensureBboxMinSize(result.bbox, RESORT_SEARCH_MIN_METERS);
+    const data = await loadResort(searchArea);
+    if (!data?.extent || data.runs.length < RESORT_FRAME_MIN_RUNS) return;
+    if (bboxRef.current !== initialBbox) return;
+    const framed = snapBboxToAspect(
+      scaleBbox(data.extent, RESORT_FRAME_PADDING),
+      aabbAspect,
+      0,
+    );
+    setBbox(framed);
+    setFlyTo(bboxCenter(framed));
+  };
+
   const handleSearch = (result: SearchResult) => {
     setLabel(result.displayName.split(",")[0]);
     setFlyTo(result.center);
-    setBbox(snapBboxToAspect(result.bbox, aabbAspect, DEFAULT_SHAPE_WIDTH_METERS));
+    const initial = snapBboxToAspect(result.bbox, aabbAspect, DEFAULT_SHAPE_WIDTH_METERS);
+    setBbox(initial);
+    if (resortSettings.showRuns) {
+      autoFrameResort(result, initial).catch((err) => console.error("[auto-frame]", err));
+    }
   };
 
   /** "Box width (km)" — sets the SHAPE's real-world width. */
@@ -378,6 +510,13 @@ export default function Home() {
         gridSize,
         source: "auto",
       };
+      // Make sure the runs cover the frame being generated; the map-time
+      // fetch may be stale after a quick drag. Not awaited: the viewer
+      // picks the runs up when they land.
+      if (resortSettings.showRuns && !resortLoading && !(resort && bboxContains(resort.bbox, bbox))) {
+        attemptedBboxRef.current = bbox;
+        void loadResort(resortFetchArea(bbox));
+      }
       const res = await fetch("/api/elevation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -444,6 +583,15 @@ export default function Home() {
             setEngraveLabel(l);
             setEngraveBrand(b);
           }}
+        />
+
+        <ResortControls
+          settings={resortSettings}
+          onChange={setResortSettings}
+          resort={resort}
+          loading={resortLoading}
+          error={resortError}
+          resolvedScheme={resolvedScheme}
         />
 
         {view === "viewer" && snapshot && (
@@ -522,6 +670,9 @@ export default function Home() {
             onResize={handleShapeResize}
             onRotationChange={handleRotationChange}
             flyTo={flyTo}
+            resort={resortSettings.showRuns ? resort : null}
+            colorScheme={resolvedScheme}
+            showLifts={resortSettings.showLifts}
           />
         )}
         {view === "viewer" && snapshot && (
@@ -537,6 +688,10 @@ export default function Home() {
             engraveLabel={engraveLabel}
             engraveBrand={engraveBrand}
             label={snapshot.label}
+            resort={resortSettings.showRuns ? resort : null}
+            colorScheme={resolvedScheme}
+            showLifts={resortSettings.showLifts}
+            minRunWidthMm={resortSettings.minRunWidthMm}
           />
         )}
         {view === "loading" && (
