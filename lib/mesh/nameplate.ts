@@ -22,8 +22,18 @@ import type { Shape } from "@/lib/shape";
 
 import { compassContour, rotateContour } from "./compass";
 import { extrudeContours } from "./manifold";
-import { BEVEL_DEG, chamferSlopeInches, plinthHeightInches, RIM_IN } from "./plinth";
-import { fontSizeForCapHeight, layoutGlyphs, measureTextWidth, type Contour } from "./text";
+import {
+  BEVEL_DEG,
+  chamferSlopeInches,
+  plinthHeightInches,
+  RIM_IN,
+} from "./plinth";
+import {
+  fontSizeForCapHeight,
+  layoutGlyphs,
+  measureTextWidth,
+  type Contour,
+} from "./text";
 
 const MM_PER_INCH = 25.4;
 
@@ -70,10 +80,18 @@ function southFace(spec: NameplateSpec, rim: number): Face {
   const { shape, widthInches, heightInches } = spec;
   switch (shape) {
     case "rectangle":
-      return { topRadius: heightInches / 2, usable: widthInches, curved: false };
+      return {
+        topRadius: heightInches / 2,
+        usable: widthInches,
+        curved: false,
+      };
     case "hexagon":
       // Flat-top hexagon: the south edge is one side, length R = W/2.
-      return { topRadius: heightInches / 2, usable: widthInches / 2, curved: false };
+      return {
+        topRadius: heightInches / 2,
+        usable: widthInches / 2,
+        curved: false,
+      };
     case "circle": {
       const midRadius = widthInches / 2 + rim / 2;
       return {
@@ -101,7 +119,10 @@ export function fitNameplate(
     (text && compass ? ARROW_GAP_CAPS * cap : 0) +
     2 * END_MARGIN_CAPS * cap;
 
-  let cap = Math.min(MAX_CAP_IN, Math.max(MIN_CAP_IN, CAP_FRACTION * chamferSlopeInches(rim)));
+  let cap = Math.min(
+    MAX_CAP_IN,
+    Math.max(MIN_CAP_IN, CAP_FRACTION * chamferSlopeInches(rim)),
+  );
   if (needed(cap, label, spec.compass) > face.usable) {
     // Shrink proportionally, then clamp to the printable floor.
     const widthAtCap = needed(cap, label, spec.compass);
@@ -138,7 +159,9 @@ export function buildNameplateSolids(
   const fontSize = fontSizeForCapHeight(font, cap);
 
   // Content laid out along the face, centered on the face's middle.
-  const textWidth = layout.text ? measureTextWidth(font, layout.text, fontSize) : 0;
+  const textWidth = layout.text
+    ? measureTextWidth(font, layout.text, fontSize)
+    : 0;
   const arrowSize = layout.compass ? ARROW_SIZE_CAPS * cap : 0;
   const gap = layout.text && layout.compass ? ARROW_GAP_CAPS * cap : 0;
   const total = textWidth + gap + arrowSize;
@@ -150,7 +173,9 @@ export function buildNameplateSolids(
   if (layout.text) {
     for (const g of layoutGlyphs(font, layout.text, fontSize)) {
       items.push({
-        contours: g.contours.map((c) => c.map(([x, y]) => [x - g.centerX, y - cap / 2])),
+        contours: g.contours.map((c) =>
+          c.map(([x, y]) => [x - g.centerX, y - cap / 2]),
+        ),
         x: startX + g.centerX,
       });
     }
@@ -165,29 +190,42 @@ export function buildNameplateSolids(
   const tilt = 90 - BEVEL_DEG;
 
   const solids: Manifold[] = [];
-  for (const item of items) {
-    // Along a cone the position is an angle; on a flat face it's an offset.
-    const angleDeg = face.curved ? (item.x / midRadius) * (180 / Math.PI) : 0;
-    const alongX = face.curved ? 0 : item.x;
+  try {
+    for (const item of items) {
+      // Along a cone the position is an angle; on a flat face it's an offset.
+      const angleDeg = face.curved ? (item.x / midRadius) * (180 / Math.PI) : 0;
+      const alongX = face.curved ? 0 : item.x;
 
-    let contours = item.contours;
-    if (contours.length === 0) {
-      // The arrow: point it at true north. In face space "up" is toward
-      // the model center; north sits `rotation` degrees from +z, and on
-      // the cone the local frame is turned by the item's angle as well.
-      contours = [rotateContour(compassContour(arrowSize), -(spec.rotation + angleDeg))];
+      let contours = item.contours;
+      if (contours.length === 0) {
+        // The arrow: point it at true north. In face space "up" is toward
+        // the model center; north sits `rotation` degrees from +z, and on
+        // the cone the local frame is turned by the item's angle as well.
+        contours = [
+          rotateContour(compassContour(arrowSize), -(spec.rotation + angleDeg)),
+        ];
+      }
+
+      const steps: Manifold[] = [];
+      try {
+        const flat = extrudeContours(m, contours, depth);
+        steps.push(flat);
+        const shifted = flat.translate([0, 0, -OVERCUT_IN]);
+        steps.push(shifted);
+        const tilted = shifted.rotate([tilt, 0, 0]);
+        steps.push(tilted);
+        const onFace = tilted.translate([alongX, h / 2, -midRadius]);
+        steps.push(onFace);
+        const placed = face.curved ? onFace.rotate([0, -angleDeg, 0]) : onFace;
+        if (placed !== onFace) steps.push(placed);
+        solids.push(placed.rotate([0, -spec.rotation, 0]));
+      } finally {
+        for (const s of steps) s.delete();
+      }
     }
-
-    const flat = extrudeContours(m, contours, depth);
-    const tilted = flat.translate([0, 0, -OVERCUT_IN]).rotate([tilt, 0, 0]);
-    const onFace = tilted.translate([alongX, h / 2, -midRadius]);
-    const placed = face.curved ? onFace.rotate([0, -angleDeg, 0]) : onFace;
-    const inModel = placed.rotate([0, -spec.rotation, 0]);
-    flat.delete();
-    tilted.delete();
-    onFace.delete();
-    if (placed !== onFace) placed.delete();
-    solids.push(inModel);
+  } catch (err) {
+    for (const s of solids) s.delete();
+    throw err;
   }
   return { solids, layout };
 }

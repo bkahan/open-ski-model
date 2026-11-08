@@ -51,38 +51,57 @@ export function buildModelSolids(
   terrainMesh: TriMesh,
   spec: ModelSpec,
 ): BuiltModel {
-  let terrain = manifoldFromMesh(m, terrainMesh);
-  let plinth: Manifold | null = null;
-  let inlays: Manifold[] = [];
-  let nameplate: NameplateLayout | null = null;
-  const plinthHeight = spec.plinth ? plinthHeightInches() : 0;
+  // Every solid made here is tracked so a throw midway frees them all;
+  // on success only the ones handed back survive.
+  const owned = new Set<Manifold>();
+  const own = <T extends Manifold>(s: T): T => {
+    owned.add(s);
+    return s;
+  };
+  const release = (s: Manifold) => {
+    owned.delete(s);
+    s.delete();
+  };
 
-  if (spec.plinth) {
-    const raw = buildPlinthSolid(m, spec);
-    const plate = buildNameplateSolids(m, font, { ...spec, compass: true });
-    nameplate = plate.layout;
-    if (plate.solids.length > 0) {
-      const cutter = m.Manifold.union(plate.solids);
-      // The fill bodies are exactly what the pockets remove.
-      inlays = plate.solids.map((s) => m.Manifold.intersection(raw, s));
-      plinth = m.Manifold.difference(raw, cutter);
-      withSolids([raw, cutter, ...plate.solids], () => undefined);
-    } else {
-      plinth = raw;
+  try {
+    let terrain = own(manifoldFromMesh(m, terrainMesh));
+    let plinth: Manifold | null = null;
+    let inlays: Manifold[] = [];
+    let nameplate: NameplateLayout | null = null;
+    const plinthHeight = spec.plinth ? plinthHeightInches() : 0;
+
+    if (spec.plinth) {
+      const raw = own(buildPlinthSolid(m, spec));
+      const plate = buildNameplateSolids(m, font, { ...spec, compass: true });
+      for (const s of plate.solids) own(s);
+      nameplate = plate.layout;
+      if (plate.solids.length > 0) {
+        const cutter = own(m.Manifold.union(plate.solids));
+        // The fill bodies are exactly what the pockets remove.
+        inlays = plate.solids.map((s) => own(m.Manifold.intersection(raw, s)));
+        plinth = own(m.Manifold.difference(raw, cutter));
+        for (const s of [raw, cutter, ...plate.solids]) release(s);
+      } else {
+        plinth = raw;
+      }
     }
-  }
 
-  if (spec.brand) {
-    const host = plinth ?? terrain;
-    const branded = cutBrand(m, font, host, spec.rotation);
-    if (branded) {
-      host.delete();
-      if (plinth) plinth = branded;
-      else terrain = branded;
+    if (spec.brand) {
+      const host = plinth ?? terrain;
+      const branded = cutBrand(m, font, host, spec.rotation);
+      if (branded) {
+        own(branded);
+        release(host);
+        if (plinth) plinth = branded;
+        else terrain = branded;
+      }
     }
-  }
 
-  return { terrain, plinth, inlays, plinthHeight, nameplate };
+    return { terrain, plinth, inlays, plinthHeight, nameplate };
+  } catch (err) {
+    for (const s of owned) s.delete();
+    throw err;
+  }
 }
 
 /**

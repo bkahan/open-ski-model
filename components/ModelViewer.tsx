@@ -501,11 +501,14 @@ export default function ModelViewer({
     positions: ArrayLike<number>;
     indices: ArrayLike<number>;
   } | null> => {
+    if (!terrainRef.current) return null;
+    const m = await loadManifold();
+    // Read the solids only after the await: a rebuild during it frees
+    // the previous set.
+    const built = builtRef.current;
     const terrain = terrainRef.current;
     if (!terrain) return null;
-    const built = builtRef.current;
     if (built) {
-      const m = await loadManifold();
       const solid = unionForExport(m, built);
       try {
         const vd = vertexDataFromManifold(solid);
