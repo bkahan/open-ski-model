@@ -34,11 +34,18 @@ box, get a watertight `.stl` you can hand to your slicer.
 
 - **Watertight mesh, boolean-engraved.** Top surface + side walls + bottom
   face, all oriented with consistent outward normals and free of
-  T-junctions, so the solid is manifold. The bottom brand is cut with
+  T-junctions, so the solid is manifold. All booleans run in
   [Manifold](https://github.com/elalish/manifold) (WASM), which handles a
-  130k-triangle terrain in well under a second; the plinth label and
-  compass still go through Babylon's CSG and are being moved over (see
-  `docs/roadmap.md`).
+  130k-triangle terrain in well under a second: the brand on the
+  underside, the name plate and north arrow in the plinth's chamfer, and
+  the terrain + plinth union used for export.
+
+- **Chamfered plinth with name plate.** A 15 mm rim at 35° all round. The
+  place name and a north arrow are cut into the south chamfer glyph by
+  glyph, so on a circular plinth they follow the cone. Cap height comes
+  from the chamfer slope and shrinks (then shortens with "…") to fit the
+  face, never below 3 mm. The pocket fill bodies are kept as separate
+  inlays for multicolor printing.
 - **Optional plinth + engravings.**
   - *Label + compass:* a beveled plinth wraps the model and the place
     name + a north-pointing arrow are inlaid into the south rim, tilted
@@ -250,6 +257,11 @@ scripts/
   copy-manifold-wasm.mjs   Copies manifold.wasm into public/
 lib/mesh/
     manifold.ts            Manifold (WASM) loader + mesh conversions
+    engrave.ts             Plinth + name plate + brand + export union
+    plinth.ts              Chamfered plinth solid (hull of offset outlines)
+    nameplate.ts           Glyph placement on the chamfer, font fitting
+    compass.ts             North-arrow outline
+    text.ts                Font loading, glyph outlines, text solids
     watertight.ts          Build closed VertexData from height grid
     runs.ts                Drape runs + lifts as ribbons, one per color
     contours.ts            Marching squares contour lines

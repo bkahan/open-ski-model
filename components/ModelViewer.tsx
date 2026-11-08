@@ -13,21 +13,19 @@ import {
   ArcRotateCamera,
   Color3,
   Color4,
-  CSG,
   DirectionalLight,
   Engine,
   HemisphericLight,
   Mesh,
   MeshBuilder,
-  Quaternion,
   Scene,
   StandardMaterial,
   Vector3,
   VertexBuffer,
+  VertexData,
 } from "@babylonjs/core";
 import { STLExport } from "@babylonjs/serializers/stl";
 import type { Manifold } from "manifold-3d";
-import type * as opentype from "opentype.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -36,23 +34,12 @@ import {
   DEFAULT_PALETTE,
 } from "@/lib/mesh/watertight";
 import { buildContourLines } from "@/lib/mesh/contours";
-import {
-  loadManifold,
-  manifoldFromMesh,
-  vertexDataFromManifold,
-  withSolids,
-  type ColorAt,
-} from "@/lib/mesh/manifold";
-import { buildPlinth } from "@/lib/mesh/plinth";
+import { buildModelSolids, unionForExport, type BuiltModel } from "@/lib/mesh/engrave";
+import { loadManifold, vertexDataFromManifold, type ColorAt } from "@/lib/mesh/manifold";
+import { plinthHeightInches } from "@/lib/mesh/plinth";
 import { buildRunRibbons } from "@/lib/mesh/runs";
 import { exportToStep } from "@/lib/mesh/step-export";
-import {
-  buildTextMesh,
-  buildTextSolid,
-  loadFont,
-  measureTextWidth,
-} from "@/lib/mesh/text";
-import { buildCompassArrow } from "@/lib/mesh/compass";
+import { loadFont } from "@/lib/mesh/text";
 import type { ElevationResponse } from "@/lib/elevation/types";
 import type { ColorScheme } from "@/lib/resort/colors";
 import type { ResortData } from "@/lib/resort/types";
@@ -85,281 +72,45 @@ interface Props {
 }
 
 const RIBBON_LIFT_IN = 0.008;
+const EDGE_COLOR = new Color4(0.08, 0.09, 0.12, 1);
 
-const BEVEL_DEG = 35;
-const BRAND_TEXT = "craftedcarving.com";
-const ENGRAVE_DEPTH_IN = 0.04; // ~1 mm
-/** The cutter starts this far outside the face so the boolean never sees coplanar faces. */
-const BRAND_OVERCUT_IN = 0.01;
-const LABEL_CAP_HEIGHT_IN = 0.18;
-const BRAND_CAP_HEIGHT_IN = 0.12;
-const COMPASS_SIZE_IN = 0.45;
-
-interface ApplyEngravingsArgs {
-  scene: Scene;
-  font: opentype.Font;
-  /** Current plinth mesh (may be replaced with an engraved version). */
-  plinthMesh: Mesh | null;
-  /** Current terrain mesh (used as the brand host if no plinth). */
-  terrainMesh: Mesh;
-  shape: Shape;
-  widthInches: number;
-  heightInches: number;
-  rotation: number;
-  baseThicknessInches: number;
-  engraveLabel: boolean;
-  engraveBrand: boolean;
-  placeLabel: string;
-  plinthHeight: number;
-}
-
-interface ApplyEngravingsResult {
-  /** Replacement plinth mesh (engraved). Null if no plinth or no engraving. */
-  newPlinth: Mesh | null;
-  /** Replacement terrain mesh (only set if brand applied to terrain). */
-  newTerrain: Mesh | null;
-  /**
-   * Engraving meshes left visible because CSG didn't produce a usable
-   * result. The caller should keep these around as raised features
-   * (and include them in the STL).
-   */
-  raisedFallback: Mesh[];
-}
-
-/**
- * Build engraving meshes (label, compass, brand) and subtract them from
- * the plinth and/or terrain via Babylon CSG. Returns the replacement
- * meshes — caller is responsible for updating refs and disposing the
- * originals.
- */
-async function applyEngravings(args: ApplyEngravingsArgs): Promise<ApplyEngravingsResult> {
-  const {
-    scene,
-    font,
-    plinthMesh,
-    terrainMesh,
-    widthInches,
-    heightInches,
-    rotation,
-    baseThicknessInches,
-    engraveLabel,
-    engraveBrand,
-    placeLabel,
-    plinthHeight,
-  } = args;
-
-  // South-edge midpoint of the shape, in shape-local coords. For
-  // rectangle / hex / circle, the bottom (south) extends to z =
-  // -heightInches/2 (for circle, heightInches == widthInches).
-  const southZ = -heightInches / 2;
-  const tanBevel = Math.tan((BEVEL_DEG * Math.PI) / 180);
-  const bevelW = plinthHeight / tanBevel;
-  const bevelMidZLocal = southZ - bevelW / 2;
-  const bevelMidYLocal = plinthHeight / 2;
-  const θ = (rotation * Math.PI) / 180;
-  const cosθ = Math.cos(θ);
-  const sinθ = Math.sin(θ);
-
-  const localToWorld = (lx: number, ly: number, lz: number) =>
-    new Vector3(lx * cosθ - lz * sinθ, ly, lx * sinθ + lz * cosθ);
-
-  // Engraving on the bevel: tilt by −BEVEL_DEG around local X first
-  // (so the polygon lays on the slope), then rotate by the shape's
-  // world rotation around Y. Quaternion multiplication in Babylon
-  // applies right-to-left, so qShape.multiply(qBevel) = bevel then shape.
-  const qBevel = Quaternion.RotationAxis(
-    new Vector3(1, 0, 0),
-    (-BEVEL_DEG * Math.PI) / 180,
-  );
-  const qShape = Quaternion.RotationAxis(new Vector3(0, 1, 0), θ);
-  const bevelEngravingRotation = qShape.multiply(qBevel);
-
-  const plinthNegatives: Mesh[] = [];
-
-  // --- Label text ---
-  if (engraveLabel && plinthMesh && placeLabel.trim()) {
-    const labelMesh = buildTextMesh({
-      font,
-      text: placeLabel,
-      size: LABEL_CAP_HEIGHT_IN,
-      depth: ENGRAVE_DEPTH_IN * 2,
-      scene,
-      name: "label-glyphs",
-    });
-    if (labelMesh) {
-      const w = measureTextWidth(font, placeLabel, LABEL_CAP_HEIGHT_IN);
-      labelMesh.position.x = -w / 2;
-      labelMesh.bakeCurrentTransformIntoVertices();
-      const worldPos = localToWorld(0, bevelMidYLocal, bevelMidZLocal);
-      labelMesh.position = worldPos;
-      labelMesh.rotationQuaternion = bevelEngravingRotation;
-      labelMesh.material = plinthMesh.material;
-      plinthNegatives.push(labelMesh);
-    } else {
-      console.warn("[engraving] label mesh was null (buildTextMesh failed)");
-    }
-  }
-
-  // --- Compass arrow ---
-  if (engraveLabel && plinthMesh) {
-    const compassMesh = buildCompassArrow({
-      size: COMPASS_SIZE_IN,
-      depth: ENGRAVE_DEPTH_IN * 2,
-      modelRotationDeg: rotation,
-      scene,
-      name: "compass",
-    });
-    if (compassMesh) {
-      const offsetX = 0.55 * (widthInches / 2);
-      const worldPos = localToWorld(offsetX, bevelMidYLocal, bevelMidZLocal);
-      compassMesh.position = worldPos;
-      compassMesh.rotationQuaternion = bevelEngravingRotation;
-      compassMesh.material = plinthMesh.material;
-      plinthNegatives.push(compassMesh);
-    } else {
-      console.warn("[engraving] compass mesh was null");
-    }
-  }
-
-  let newPlinth: Mesh | null = null;
-  let newTerrain: Mesh | null = null;
-  const raisedFallback: Mesh[] = [];
-
-  // CSG subtract plinth negatives from plinth.
-  if (plinthMesh && plinthNegatives.length) {
-    let csgOk = false;
-    try {
-      for (const n of plinthNegatives) {
-        n.computeWorldMatrix(true);
-        n.bakeCurrentTransformIntoVertices();
-      }
-      plinthMesh.computeWorldMatrix(true);
-      let plinthCSG = CSG.FromMesh(plinthMesh);
-      for (const n of plinthNegatives) {
-        plinthCSG = plinthCSG.subtract(CSG.FromMesh(n));
-      }
-      const engraved = plinthCSG.toMesh(
-        "plinth-engraved",
-        plinthMesh.material,
-        scene,
-        true,
-      );
-      if (engraved.getTotalVertices() === 0) {
-        console.warn("[engraving] plinth CSG produced empty mesh — falling back to raised");
-        engraved.dispose();
-      } else {
-        engraved.enableEdgesRendering(0.95);
-        engraved.edgesWidth = 1.5;
-        engraved.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
-        newPlinth = engraved;
-        csgOk = true;
-      }
-    } catch (err) {
-      console.warn("[engraving] plinth CSG failed — falling back to raised", err);
-    }
-    if (csgOk) {
-      // CSG succeeded — engravings are now part of the plinth, so the
-      // temp meshes are no longer needed.
-      for (const n of plinthNegatives) n.dispose();
-    } else {
-      // Keep the engraving meshes around as raised fallback so the user
-      // still sees something. They penetrate the surface; the visible
-      // portion poking out reads as raised text.
-      for (const n of plinthNegatives) raisedFallback.push(n);
-    }
-  }
-
-  // --- Brand on the bottom face, cut with Manifold ---
-  // Whichever body owns the bottom face hosts it: the plinth when there
-  // is one, otherwise the terrain. Both sit at the origin, so local
-  // vertex coordinates are world coordinates.
-  if (engraveBrand) {
-    const host = newPlinth ?? plinthMesh ?? terrainMesh;
-    try {
-      const engraved = await engraveBrandOnBottom(scene, font, host, rotation, {
-        isTerrain: host === terrainMesh,
-        terrainBaseY: baseThicknessInches,
-      });
-      if (engraved) {
-        if (host === terrainMesh) {
-          newTerrain = engraved;
-        } else {
-          newPlinth?.dispose();
-          newPlinth = engraved;
-        }
-      }
-    } catch (err) {
-      console.warn("[engraving] brand failed; leaving the bottom plain", err);
-    }
-  }
-
-  return { newPlinth, newTerrain, raisedFallback };
-}
-
-/**
- * Cut the brand text into the underside of `host` (whose bottom face is
- * the y = 0 plane). The text is mirrored so it reads correctly when the
- * model is turned over, and follows the model's rotation.
- */
-async function engraveBrandOnBottom(
+function meshFromSolid(
   scene: Scene,
-  font: opentype.Font,
-  host: Mesh,
-  rotationDeg: number,
-  opts: { isTerrain: boolean; terrainBaseY: number },
-): Promise<Mesh | null> {
-  const positions = host.getVerticesData(VertexBuffer.PositionKind);
-  const indices = host.getIndices();
-  if (!positions || !indices) return null;
+  name: string,
+  solid: Manifold,
+  material: StandardMaterial,
+  colorAt?: ColorAt,
+): Mesh {
+  const mesh = new Mesh(name, scene);
+  vertexDataFromManifold(solid, colorAt).applyToMesh(mesh, true);
+  mesh.material = material;
+  mesh.enableEdgesRendering(0.95);
+  mesh.edgesWidth = 1.5;
+  mesh.edgesColor = EDGE_COLOR;
+  return mesh;
+}
 
-  const m = await loadManifold();
-  const width = measureTextWidth(font, BRAND_TEXT, BRAND_CAP_HEIGHT_IN);
+const UNDERSIDE_COLOR: [number, number, number] = [0.78, 0.79, 0.82];
 
-  // Every Manifold lives in WASM memory; collect them so a throw on any
-  // step still frees the ones made before it.
-  const solids: Manifold[] = [];
-  const keep = <T extends Manifold>(s: T): T => {
-    solids.push(s);
-    return s;
+/**
+ * Re-paint a Manifold-built terrain: surface by height, walls in the
+ * palette's base color, and the underside light so the brand pocket
+ * is visible when the model is turned over.
+ */
+function terrainColorAt(baseY: number, topY: number): ColorAt {
+  const span = Math.max(topY - baseY, 1e-6);
+  return (_x, y, _z, ny) => {
+    if (ny > 0.3 && y > baseY - 1e-4) return DEFAULT_PALETTE.surface((y - baseY) / span);
+    if (y < baseY * 0.5) return UNDERSIDE_COLOR;
+    return DEFAULT_PALETTE.base;
   };
-  return withSolids(solids, () => {
-    const text = buildTextSolid(m, font, BRAND_TEXT, BRAND_CAP_HEIGHT_IN, ENGRAVE_DEPTH_IN + BRAND_OVERCUT_IN);
-    if (!text) return null;
-    keep(text);
+}
 
-    // Text is built in XY, extruded along +Z. Lay it into the XZ plane
-    // pointing up into the body (y from -overcut to +depth), with the
-    // glyph y axis mapped to -z so it mirrors for reading from below.
-    const centered = keep(text.translate([-width / 2, -BRAND_CAP_HEIGHT_IN / 2, -BRAND_OVERCUT_IN]));
-    const laidFlat = keep(centered.rotate([-90, 0, 0]));
-    const placed = keep(laidFlat.rotate([0, rotationDeg, 0]));
-    const solid = keep(manifoldFromMesh(m, { positions, indices }));
-    const cut = keep(m.Manifold.difference(solid, placed));
-    if (cut.status() !== "NoError" || cut.numTri() === 0) {
-      console.warn("[engraving] brand difference failed:", cut.status());
-      return null;
-    }
-
-    // Manifold output carries no colors. The terrain is re-painted by
-    // height (walls, bottom and pockets in base color); the plinth has
-    // no vertex colors and keeps its material.
-    let colorAt: ColorAt | undefined;
-    if (opts.isTerrain) {
-      const topY = host.getBoundingInfo().boundingBox.maximum.y;
-      const span = Math.max(topY - opts.terrainBaseY, 1e-6);
-      colorAt = (_x, y, _z, ny) =>
-        ny > 0.3 && y > opts.terrainBaseY - 1e-4
-          ? DEFAULT_PALETTE.surface((y - opts.terrainBaseY) / span)
-          : DEFAULT_PALETTE.base;
-    }
-    const mesh = new Mesh(host.name + "-engraved", scene);
-    vertexDataFromManifold(cut, colorAt).applyToMesh(mesh, true);
-    mesh.material = host.material;
-    mesh.enableEdgesRendering(0.95);
-    mesh.edgesWidth = 1.5;
-    mesh.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
-    return mesh;
-  });
+function freeBuilt(built: BuiltModel | null) {
+  if (!built) return;
+  built.terrain.delete();
+  built.plinth?.delete();
+  for (const s of built.inlays) s.delete();
 }
 
 const MM_PER_INCH = 25.4;
@@ -389,9 +140,12 @@ export default function ModelViewer({
   const plinthRef = useRef<Mesh | null>(null);
   const contoursRef = useRef<Mesh | null>(null);
   const ribbonsRef = useRef<Mesh[]>([]);
-  const engravingFallbackRef = useRef<Mesh[]>([]);
+  const inlaysRef = useRef<Mesh[]>([]);
+  /** Solids from the last completed boolean pass; what export uses. */
+  const builtRef = useRef<BuiltModel | null>(null);
   const terrainMatRef = useRef<StandardMaterial | null>(null);
   const plinthMatRef = useRef<StandardMaterial | null>(null);
+  const inlayMatRef = useRef<StandardMaterial | null>(null);
   const lightRef = useRef<DirectionalLight | null>(null);
 
   const [sunAzimuth, setSunAzimuth] = useState(135); // degrees
@@ -459,6 +213,14 @@ export default function ModelViewer({
     pmat.backFaceCulling = false;
     plinthMatRef.current = pmat;
 
+    // Name-plate fill bodies: previewed in a dark filament color.
+    const imat = new StandardMaterial("inlayMat", scene);
+    imat.diffuseColor = new Color3(0.12, 0.13, 0.16);
+    imat.specularColor = new Color3(0.05, 0.05, 0.05);
+    imat.emissiveColor = new Color3(0.03, 0.03, 0.04);
+    imat.backFaceCulling = false;
+    inlayMatRef.current = imat;
+
     engine.runRenderLoop(() => scene.render());
 
     const onResize = () => engine.resize();
@@ -473,7 +235,9 @@ export default function ModelViewer({
       plinthRef.current = null;
       contoursRef.current = null;
       ribbonsRef.current = [];
-      engravingFallbackRef.current = [];
+      inlaysRef.current = [];
+      freeBuilt(builtRef.current);
+      builtRef.current = null;
       lightRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -492,12 +256,14 @@ export default function ModelViewer({
 
     let cancelled = false;
 
-    // Dispose any prior meshes — we always rebuild from scratch so CSG
-    // engravings don't get wiped by applyToMesh on the next rebuild.
+    // Always rebuild from scratch; the boolean pass below replaces these
+    // meshes once it finishes.
     terrainRef.current?.dispose();
     plinthRef.current?.dispose();
-    for (const m of engravingFallbackRef.current) m.dispose();
-    engravingFallbackRef.current = [];
+    for (const m of inlaysRef.current) m.dispose();
+    inlaysRef.current = [];
+    freeBuilt(builtRef.current);
+    builtRef.current = null;
 
     const meshSpec = {
       bbox,
@@ -523,12 +289,10 @@ export default function ModelViewer({
     terrain.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
     terrainRef.current = terrain;
 
-    // The plinth occupies y ∈ [0, plinthTopY]; when present, the
-    // terrain is shifted up so its bottom sits on the plinth's top.
-    // We need this constant before the contour block (contours shift
-    // with the terrain) and before the plinth construction below.
-    const plinthTopY = baseThicknessInches;
-    terrain.position.y = engraveLabel ? plinthTopY : 0;
+    // With a plinth the terrain sits on top of it, so everything drawn in
+    // terrain coordinates shifts up by the plinth height.
+    const plinthTopY = engraveLabel ? plinthHeightInches() : 0;
+    terrain.position.y = plinthTopY;
     terrain.computeWorldMatrix(true);
 
     // Rebuild contour lines (replace any previous mesh). For non-rect
@@ -585,84 +349,56 @@ export default function ModelViewer({
       // Slightly lifted dark line — readable on the mid-gray terrain.
       lineMesh.color = new Color3(0.18, 0.21, 0.26);
       lineMesh.isPickable = false;
-      // Contour y-values are computed relative to the terrain's own
-      // origin (base = baseThicknessInches). When the plinth is enabled
-      // the terrain mesh shifts UP by plinthTopY; the contours need the
-      // same shift or they hide INSIDE the plinth.
-      lineMesh.position.y = engraveLabel ? plinthTopY : 0;
+      lineMesh.position.y = plinthTopY;
       lineMesh.setEnabled(showContours);
       contoursRef.current = lineMesh;
     }
-    // ---------- Plinth ----------
-    if (engraveLabel) {
-      const bevelW =
-        baseThicknessInches /
-        Math.tan((BEVEL_DEG * Math.PI) / 180);
-
-      const plinthResult = buildPlinth({
-        shape,
-        widthInches,
-        heightInches,
-        rotation,
-        bevelDeg: BEVEL_DEG,
-        bevelWidthInches: bevelW,
-        plinthTopY,
-      });
-
-      const plinthMesh = new Mesh("plinth", scene);
-      plinthMesh.material = plinthMat;
-      plinthResult.vertexData.applyToMesh(plinthMesh, true);
-      plinthMesh.enableEdgesRendering(0.95);
-      plinthMesh.edgesWidth = 1.5;
-      plinthMesh.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
-      plinthRef.current = plinthMesh;
-    }
-
-    // ---------- Async engraving via CSG ----------
-    // Font loading is async, and CSG.subtract can be slow on dense
-    // meshes, so we run engravings off the main paint and bail out if
-    // inputs change before we finish.
-    const doEngrave = (engraveLabel && plinthRef.current) || engraveBrand;
-    if (doEngrave) {
+    // ---------- Plinth, name plate, brand (Manifold, async) ----------
+    // Font and WASM load once; after that the whole pass takes well
+    // under a second even at high density. Results replace the plain
+    // meshes above unless the inputs changed meanwhile.
+    if (engraveLabel || engraveBrand) {
+      const positions = vertexData.positions;
+      const indices = vertexData.indices;
       (async () => {
         try {
-          const font = await loadFont();
-          if (cancelled) return;
-          const { newPlinth, newTerrain, raisedFallback } = await applyEngravings({
-            scene,
-            font,
-            plinthMesh: plinthRef.current,
-            terrainMesh: terrain,
+          const [m, font] = await Promise.all([loadManifold(), loadFont()]);
+          if (cancelled || !positions || !indices) return;
+          const built = buildModelSolids(m, font, { positions, indices }, {
             shape,
             widthInches,
             heightInches,
             rotation,
-            baseThicknessInches,
-            engraveLabel,
-            engraveBrand,
-            placeLabel: label ?? "",
-            plinthHeight: plinthTopY,
+            label: label ?? "",
+            plinth: engraveLabel,
+            brand: engraveBrand,
           });
           if (cancelled) {
-            newPlinth?.dispose();
-            newTerrain?.dispose();
-            for (const m of raisedFallback) m.dispose();
+            freeBuilt(built);
             return;
           }
-          if (newPlinth) {
-            plinthRef.current?.dispose();
-            plinthRef.current = newPlinth;
-          }
-          if (newTerrain) {
-            const oldY = terrain.position.y;
-            newTerrain.position.y = oldY;
-            terrainRef.current = newTerrain;
+          builtRef.current = built;
+
+          if (engraveBrand && !built.plinth) {
+            const topY = terrain.getBoundingInfo().boundingBox.maximum.y;
+            const branded = meshFromSolid(
+              scene,
+              "terrain",
+              built.terrain,
+              terrainMat,
+              terrainColorAt(baseThicknessInches, topY),
+            );
+            branded.position.y = plinthTopY;
             terrain.dispose();
+            terrainRef.current = branded;
           }
-          // Stash any fallback (raised-visible) engraving meshes so
-          // they get cleaned up on the next rebuild and included in
-          // the STL export.
-          engravingFallbackRef.current = raisedFallback;
+          if (built.plinth) {
+            plinthRef.current = meshFromSolid(scene, "plinth", built.plinth, plinthMat);
+            const inlayMat = inlayMatRef.current ?? plinthMat;
+            inlaysRef.current = built.inlays.map((solid, i) =>
+              meshFromSolid(scene, `inlay-${i}`, solid, inlayMat),
+            );
+          }
         } catch (err) {
           console.error("[engraving] failed", err);
         }
@@ -707,7 +443,7 @@ export default function ModelViewer({
       lift: RIBBON_LIFT_IN,
     });
 
-    const yOffset = engraveLabel ? baseThicknessInches : 0;
+    const yOffset = engraveLabel ? plinthHeightInches() : 0;
     ribbonsRef.current = groups.map((g) => {
       const mat = new StandardMaterial(`run-${g.name}`, scene);
       mat.diffuseColor = new Color3(...g.rgb);
@@ -756,188 +492,77 @@ export default function ModelViewer({
     light.direction = new Vector3(x, y, z);
   }, [sunAzimuth]);
 
-  // --- 5. STL export ---
-  // When the plinth is present we CSG-union it with the terrain so the
-  // exported STL is a single watertight solid (separate meshes would
-  // produce non-manifold seams where the plinth top meets the terrain
-  // bottom). Plinth + terrain union is small relative to the engraving
-  // subtracts — it should finish in well under a second even at high
-  // density.
+  // --- 5. Export ---
+  // One solid: terrain lifted onto the plinth and unioned with it by
+  // Manifold, so the seam between them is closed. Before the boolean
+  // pass finishes (or when nothing is engraved) the plain terrain mesh
+  // is exported as it stands.
+  const exportGeometry = useCallback(async (): Promise<{
+    positions: ArrayLike<number>;
+    indices: ArrayLike<number>;
+  } | null> => {
+    const terrain = terrainRef.current;
+    if (!terrain) return null;
+    const built = builtRef.current;
+    if (built) {
+      const m = await loadManifold();
+      const solid = unionForExport(m, built);
+      try {
+        const vd = vertexDataFromManifold(solid);
+        return { positions: vd.positions!, indices: vd.indices! };
+      } finally {
+        solid.delete();
+      }
+    }
+    const positions = terrain.getVerticesData(VertexBuffer.PositionKind);
+    const indices = terrain.getIndices();
+    if (!positions || !indices) return null;
+    if (terrain.position.y === 0) return { positions, indices };
+    const lifted = Float32Array.from(positions);
+    for (let i = 1; i < lifted.length; i += 3) lifted[i] += terrain.position.y;
+    return { positions: lifted, indices };
+  }, []);
+
   const exportSTL = useCallback(() => {
     const scene = sceneRef.current;
-    const terrain = terrainRef.current;
-    if (!scene || !terrain) return;
-    const plinth = plinthRef.current;
-
-    let exportMesh: Mesh | null = null;
-    if (plinth) {
-      try {
-        terrain.computeWorldMatrix(true);
-        plinth.computeWorldMatrix(true);
-        const unionCSG = CSG.FromMesh(terrain).union(CSG.FromMesh(plinth));
-        exportMesh = unionCSG.toMesh(
-          "export-union",
-          terrain.material,
-          scene,
-          true,
-        );
-      } catch (err) {
-        console.warn("[stl] union failed; falling back to multi-mesh export", err);
-      }
-    }
-    if (!exportMesh) {
-      // Fallback: clone meshes and export them as multiple shells. This
-      // is what users were getting before; it works but produces a
-      // technically non-manifold STL.
-      const clones: Mesh[] = [];
-      const terrainClone = terrain.clone("export-terrain", null, true);
-      if (terrainClone) {
-        terrainClone.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
-        clones.push(terrainClone);
-      }
-      if (plinth) {
-        const plinthClone = plinth.clone("export-plinth", null, true);
-        if (plinthClone) {
-          plinthClone.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
-          clones.push(plinthClone);
-        }
-      }
-      for (const f of engravingFallbackRef.current) {
-        const fc = f.clone(`export-${f.name}`, null, true);
-        if (fc) {
-          fc.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
-          clones.push(fc);
-        }
-      }
-      if (!clones.length) return;
+    if (!scene) return;
+    void exportGeometry().then((geom) => {
+      if (!geom) return;
+      const mesh = new Mesh("export-stl", scene);
+      const vd = new VertexData();
+      vd.positions = Float32Array.from(geom.positions);
+      vd.indices = Uint32Array.from(geom.indices);
+      vd.applyToMesh(mesh, false);
+      mesh.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
+      mesh.isVisible = false;
       const filename = (label ? slug(label) : "ski-model") + ".stl";
-      STLExport.CreateSTL(clones, true, filename, true, true, false);
-      for (const c of clones) c.dispose();
-      return;
-    }
+      STLExport.CreateSTL([mesh], true, filename, true, true, false);
+      mesh.dispose();
+    }).catch((err: unknown) => console.error("[stl] export failed", err));
+  }, [label, exportGeometry]);
 
-    exportMesh.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
-    // Include any raised-fallback engraving meshes too. They aren't
-    // CSG-merged with the host (CSG didn't succeed), but slicers will
-    // typically treat the file as the union of all shells.
-    const fallbacks = engravingFallbackRef.current;
-    const fallbackClones: Mesh[] = [];
-    for (const f of fallbacks) {
-      const fc = f.clone(`export-${f.name}`, null, true);
-      if (fc) {
-        fc.scaling = new Vector3(MM_PER_INCH, MM_PER_INCH, MM_PER_INCH);
-        fallbackClones.push(fc);
-      }
-    }
-    const filename = (label ? slug(label) : "ski-model") + ".stl";
-    STLExport.CreateSTL(
-      [exportMesh, ...fallbackClones],
-      true,
-      filename,
-      true,
-      true,
-      false,
-    );
-    exportMesh.dispose();
-    for (const fc of fallbackClones) fc.dispose();
-  }, [label]);
-
-  // --- 6. STEP export ---
   // STEP gives a true B-rep solid (each triangle → an ADVANCED_FACE in
-  // a single MANIFOLD_SOLID_BREP) so CAD apps like Fusion / SolidWorks
-  // open the model as one selectable object rather than a triangle
-  // soup. We concatenate terrain + plinth + any raised-fallback
-  // engravings into one big vertex buffer; the exporter dedupes
-  // coincident vertices so adjacent meshes fuse into a single solid.
+  // a single MANIFOLD_SOLID_BREP) so CAD apps open the model as one
+  // selectable object rather than a triangle soup.
   const exportSTEP = useCallback(() => {
-    const scene = sceneRef.current;
-    const terrain = terrainRef.current;
-    if (!scene || !terrain) return;
-    const plinth = plinthRef.current;
-
-    // 1. Build the list of meshes to include. Try CSG-union plinth +
-    //    terrain first so the seam closes cleanly; fall back to two
-    //    separate meshes (the exporter will fuse them by position
-    //    dedup).
-    const meshes: Mesh[] = [];
-    let unionMesh: Mesh | null = null;
-    if (plinth) {
-      try {
-        terrain.computeWorldMatrix(true);
-        plinth.computeWorldMatrix(true);
-        const u = CSG.FromMesh(terrain).union(CSG.FromMesh(plinth));
-        unionMesh = u.toMesh("export-step", null, scene, true);
-      } catch (err) {
-        console.warn("[step] CSG union failed; using separate meshes", err);
-      }
-    }
-    if (unionMesh) {
-      meshes.push(unionMesh);
-    } else {
-      const tc = terrain.clone("export-step-terrain", null, true);
-      if (tc) {
-        tc.computeWorldMatrix(true);
-        tc.bakeCurrentTransformIntoVertices();
-        meshes.push(tc);
-      }
-      if (plinth) {
-        const pc = plinth.clone("export-step-plinth", null, true);
-        if (pc) {
-          pc.computeWorldMatrix(true);
-          pc.bakeCurrentTransformIntoVertices();
-          meshes.push(pc);
-        }
-      }
-    }
-    for (const f of engravingFallbackRef.current) {
-      const fc = f.clone(`export-step-${f.name}`, null, true);
-      if (fc) {
-        fc.computeWorldMatrix(true);
-        fc.bakeCurrentTransformIntoVertices();
-        meshes.push(fc);
-      }
-    }
-    if (meshes.length === 0) return;
-
-    // 2. Concatenate positions + indices (with index offsets).
-    const allPositions: number[] = [];
-    const allIndices: number[] = [];
-    for (const m of meshes) {
-      const p = m.getVerticesData(VertexBuffer.PositionKind);
-      const idx = m.getIndices();
-      if (!p || !idx) continue;
-      const vertOffset = allPositions.length / 3;
-      for (let i = 0; i < p.length; i++) allPositions.push(p[i]);
-      for (let i = 0; i < idx.length; i++) allIndices.push(idx[i] + vertOffset);
-    }
-
-    // 3. Generate STEP text.
-    const stepName = label ? slug(label) : "ski-model";
-    let stepStr: string;
-    try {
-      stepStr = exportToStep(
-        { positions: allPositions, indices: allIndices },
+    void exportGeometry().then((geom) => {
+      if (!geom) return;
+      const stepName = label ? slug(label) : "ski-model";
+      const stepStr = exportToStep(
+        { positions: Array.from(geom.positions), indices: Array.from(geom.indices) },
         { name: stepName, unitScale: MM_PER_INCH },
       );
-    } catch (err) {
-      console.error("[step] export failed", err);
-      for (const m of meshes) m.dispose();
-      return;
-    }
-
-    // 4. Trigger download.
-    const blob = new Blob([stepStr], { type: "application/STEP" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = stepName + ".step";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    for (const m of meshes) m.dispose();
-  }, [label]);
+      const blob = new Blob([stepStr], { type: "application/STEP" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = stepName + ".step";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }).catch((err: unknown) => console.error("[step] export failed", err));
+  }, [label, exportGeometry]);
 
   return (
     <div className="relative w-full h-full">
