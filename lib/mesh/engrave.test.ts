@@ -11,7 +11,7 @@ import type { Bbox } from "@/lib/types";
 
 import { buildModelSolids, unionForExport } from "./engrave";
 import { withSolids } from "./manifold";
-import { buildNameplateSolids, fitNameplate } from "./nameplate";
+import { buildNameplateSolids, fitNameplate, plateTurnDeg } from "./nameplate";
 import { buildPlinthSolid, plinthHeightInches, RIM_IN } from "./plinth";
 import { buildShapedWatertight, buildWatertight } from "./watertight";
 
@@ -88,8 +88,31 @@ describe("fitNameplate", () => {
   });
 });
 
+describe("plateTurnDeg", () => {
+  const rect = { shape: "rectangle" as Shape, widthInches: 6, heightInches: 4 };
+
+  it("stays on the frame's bottom edge without a facing", () => {
+    expect(plateTurnDeg({ ...rect, rotation: 0 })).toBe(0);
+    expect(plateTurnDeg({ ...rect, rotation: 37 })).toBe(0);
+  });
+
+  it("undoes the model rotation to face a bearing", () => {
+    expect(plateTurnDeg({ ...rect, rotation: 0, facing: 180 })).toBe(0);
+    expect(plateTurnDeg({ ...rect, rotation: 0, facing: 90 })).toBe(90);
+    expect(plateTurnDeg({ ...rect, rotation: 90, facing: 90 })).toBe(0);
+    expect(plateTurnDeg({ ...rect, rotation: 0, facing: 0 })).toBe(180);
+  });
+
+  it("snaps to faces: 90° on rectangles, 60° on hexagons, none on circles", () => {
+    expect(plateTurnDeg({ ...rect, rotation: 0, facing: 130 })).toBe(90);
+    expect(plateTurnDeg({ ...rect, rotation: 0, facing: 140 })).toBe(0);
+    expect(plateTurnDeg({ shape: "hexagon", widthInches: 6, heightInches: 5.2, rotation: 0, facing: 45 })).toBe(120);
+    expect(plateTurnDeg({ shape: "circle", widthInches: 6, heightInches: 6, rotation: 0, facing: 45 })).toBe(135);
+  });
+});
+
 describe("buildNameplateSolids", () => {
-  it("places every glyph and the arrow on the south chamfer", () => {
+  it("places every glyph and the arrow on the frame's bottom edge by default", () => {
     const { solids, layout } = buildNameplateSolids(m, font, {
       shape: "rectangle",
       ...base,
@@ -108,6 +131,49 @@ describe("buildNameplateSolids", () => {
         expect(box.min[1]).toBeLessThan(h / 2);
         expect(box.max[1]).toBeGreaterThan(h / 2);
       }
+    });
+  });
+
+  it("moves to the face nearest the resort's base side", () => {
+    // 8 wide, 6 tall, turned 90°: the long edges now run north-south,
+    // and the base lies east.
+    const { solids } = buildNameplateSolids(m, font, {
+      shape: "rectangle",
+      ...base,
+      widthInches: 8,
+      rotation: 90,
+      facing: 90,
+      label: "Stowe",
+      compass: true,
+    });
+    withSolids(solids, () => {
+      for (const s of solids) {
+        const box = s.boundingBox();
+        expect(box.min[0]).toBeGreaterThan(3 - 0.05);
+        expect(box.max[0]).toBeLessThan(3 + RIM_IN + 0.1);
+      }
+      // The plate spans the 8" face, not a 6" one.
+      const zs = solids.flatMap((s) => [s.boundingBox().min[2], s.boundingBox().max[2]]);
+      expect(Math.max(...zs) - Math.min(...zs)).toBeGreaterThan(1);
+    });
+  });
+
+  it("keeps the arrow on true north wherever the plate sits", () => {
+    const { solids } = buildNameplateSolids(m, font, {
+      shape: "rectangle",
+      ...base,
+      facing: 90,
+      label: "",
+      compass: true,
+    });
+    withSolids(solids, () => {
+      expect(solids).toHaveLength(1);
+      // On the east face the arrow lies along z. Its tip reaches r
+      // past center and the stem 0.85 r the other way, so the longer
+      // reach must be north.
+      const box = solids[0].boundingBox();
+      expect(box.max[2]).toBeGreaterThan(0);
+      expect(box.max[2] / -box.min[2]).toBeCloseTo(1 / 0.85, 1);
     });
   });
 

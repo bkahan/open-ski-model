@@ -1,15 +1,19 @@
-// Name plate: the place name and a north arrow set into the plinth's
-// south chamfer. Each glyph is placed on its own, so on a circular
-// plinth the text follows the cone instead of cutting a flat chord
-// through it.
+// Name plate: the place name and a north arrow set into one chamfer of
+// the plinth, the one on the resort's base side when that is known and
+// otherwise the bottom edge of the frame. Each glyph is placed on its
+// own, so on a circular plinth the text follows the cone instead of
+// cutting a flat chord through it.
 //
 // Frames, all in inches:
 //   text space      x right, y up, extruded +z (what text.ts produces)
-//   face space      the chamfer, pre-rotation: x along the face, "up"
-//                   is up the slope toward the terrain, normal tilted
-//                   35° off vertical toward the viewer standing south
-//   model space     x east, y up, z north; the model's rotation applied
-//                   last, with the same sign convention as shapeOutline
+//   face space      the south chamfer of the unrotated shape: x along
+//                   the face, "up" is up the slope toward the terrain,
+//                   normal tilted 35° off vertical toward a viewer
+//                   standing south
+//   model space     x east, y up, z north. One spin about y takes the
+//                   face to where it belongs: around the cone (circle),
+//                   to the chosen face, then the model's own rotation,
+//                   all with shapeOutline's sign convention
 //
 // Font size comes from the chamfer: cap height is a fraction of the
 // slope length, clamped to what a nozzle can resolve, then shrunk until
@@ -51,11 +55,20 @@ const ARROW_SIZE_CAPS = 1.25;
 /** On a circle, how much of the cone the plate may wrap around. */
 const MAX_ARC_DEG = 110;
 
-export interface NameplateSpec {
+export interface PlateSide {
   shape: Shape;
   widthInches: number;
   heightInches: number;
   rotation: number;
+  /**
+   * Geographic bearing the plate should face, degrees clockwise from
+   * north; snapped to the nearest face on rectangles and hexagons.
+   * Omitted: the bottom edge of the frame, whatever the rotation.
+   */
+  facing?: number;
+}
+
+export interface NameplateSpec extends PlateSide {
   label: string;
   compass: boolean;
   rimInches?: number;
@@ -69,28 +82,66 @@ export interface NameplateLayout {
 }
 
 interface Face {
-  /** Distance from model center to the top edge of the south face. */
+  /** Distance from model center to the top edge of the face. */
   topRadius: number;
   /** Usable length along the face (chord for flat faces, arc for the cone). */
   usable: number;
   curved: boolean;
+  /** Spin about y, in shapeOutline's degrees, from the unrotated south face to this one. */
+  turn: number;
 }
 
-function southFace(spec: NameplateSpec, rim: number): Face {
-  const { shape, widthInches, heightInches } = spec;
-  switch (shape) {
+/**
+ * How far the unrotated south face must spin to end up facing `facing`
+ * once the model's own rotation is applied. A face spun by t sits at
+ * bearing 180 − (t + rotation), so t = 180 − facing − rotation.
+ */
+function wantedTurn(side: PlateSide): number {
+  if (side.facing === undefined) return 0;
+  return normalizeDeg(180 - side.facing - side.rotation);
+}
+
+function normalizeDeg(deg: number): number {
+  return ((deg % 360) + 360) % 360;
+}
+
+function snapTurn(turn: number, stepDeg: number): number {
+  return normalizeDeg(Math.round(turn / stepDeg) * stepDeg);
+}
+
+/** The spin that takes the south face to the plate's face, for anything else that should line up with it. */
+export function plateTurnDeg(side: PlateSide): number {
+  switch (side.shape) {
     case "rectangle":
-      return {
-        topRadius: heightInches / 2,
-        usable: widthInches,
-        curved: false,
-      };
+      return snapTurn(wantedTurn(side), 90);
     case "hexagon":
-      // Flat-top hexagon: the south edge is one side, length R = W/2.
+      return snapTurn(wantedTurn(side), 60);
+    case "circle":
+      return wantedTurn(side);
+  }
+}
+
+function plateFace(spec: NameplateSpec, rim: number): Face {
+  const { shape, widthInches, heightInches } = spec;
+  const turn = plateTurnDeg(spec);
+  switch (shape) {
+    case "rectangle": {
+      // South and north faces run the width; east and west the height.
+      const alongWidth = turn % 180 === 0;
+      return {
+        topRadius: (alongWidth ? heightInches : widthInches) / 2,
+        usable: alongWidth ? widthInches : heightInches,
+        curved: false,
+        turn,
+      };
+    }
+    case "hexagon":
+      // Flat-top hexagon: every side is R = W/2 long, H/2 from center.
       return {
         topRadius: heightInches / 2,
         usable: widthInches / 2,
         curved: false,
+        turn,
       };
     case "circle": {
       const midRadius = widthInches / 2 + rim / 2;
@@ -98,6 +149,7 @@ function southFace(spec: NameplateSpec, rim: number): Face {
         topRadius: widthInches / 2,
         usable: midRadius * ((MAX_ARC_DEG * Math.PI) / 180),
         curved: true,
+        turn,
       };
     }
   }
@@ -109,7 +161,7 @@ export function fitNameplate(
   spec: NameplateSpec,
 ): NameplateLayout | null {
   const rim = spec.rimInches ?? RIM_IN;
-  const face = southFace(spec, rim);
+  const face = plateFace(spec, rim);
   const label = spec.label.trim();
   if (!label && !spec.compass) return null;
 
@@ -153,7 +205,7 @@ export function buildNameplateSolids(
 
   const rim = spec.rimInches ?? RIM_IN;
   const h = plinthHeightInches(rim);
-  const face = southFace(spec, rim);
+  const face = plateFace(spec, rim);
   const midRadius = face.topRadius + rim / 2;
   const cap = layout.capInches;
   const fontSize = fontSizeForCapHeight(font, cap);
@@ -195,15 +247,15 @@ export function buildNameplateSolids(
       // Along a cone the position is an angle; on a flat face it's an offset.
       const angleDeg = face.curved ? (item.x / midRadius) * (180 / Math.PI) : 0;
       const alongX = face.curved ? 0 : item.x;
+      // Everything that turns the south face into this item's spot.
+      const spin = angleDeg + face.turn + spec.rotation;
 
       let contours = item.contours;
       if (contours.length === 0) {
         // The arrow: point it at true north. In face space "up" is toward
-        // the model center; north sits `rotation` degrees from +z, and on
-        // the cone the local frame is turned by the item's angle as well.
-        contours = [
-          rotateContour(compassContour(arrowSize), -(spec.rotation + angleDeg)),
-        ];
+        // the model center, which is north only before the spin, so the
+        // arrow is turned back by the same amount.
+        contours = [rotateContour(compassContour(arrowSize), -spin)];
       }
 
       const steps: Manifold[] = [];
@@ -216,9 +268,7 @@ export function buildNameplateSolids(
         steps.push(tilted);
         const onFace = tilted.translate([alongX, h / 2, -midRadius]);
         steps.push(onFace);
-        const placed = face.curved ? onFace.rotate([0, -angleDeg, 0]) : onFace;
-        if (placed !== onFace) steps.push(placed);
-        solids.push(placed.rotate([0, -spec.rotation, 0]));
+        solids.push(onFace.rotate([0, -spin, 0]));
       } finally {
         for (const s of steps) s.delete();
       }

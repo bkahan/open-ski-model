@@ -39,8 +39,10 @@ no visible text. Replacing both:
   manifold (bottom fan over the wall ring); bottom brand cut with Manifold.
 - E2 (done): chamfered plinth, 15 mm rim at 35° all round (a single
   chamfer angle ties rim width to height, so 10.5 mm tall). Name and
-  north arrow cut into the south chamfer with Manifold, glyph by glyph
-  so they follow a circular plinth's cone. Cap height is 38% of the
+  north arrow cut into the chamfer on the resort's base side (mean
+  downhill direction of runs and lifts, snapped to a face on rectangles
+  and hexagons; frame bottom without a resort) with Manifold, glyph by
+  glyph so they follow a circular plinth's cone. Cap height is 38% of the
   chamfer slope (3–9 mm), shrunk and then shortened with "…" to fit.
   Fill bodies for each pocket are kept as inlays (previewed dark) for
   multicolor export.

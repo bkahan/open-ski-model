@@ -15,6 +15,7 @@ import { VertexData } from "@babylonjs/core";
 import { bboxCenter, bboxWidthMeters, metersPerDegLng } from "@/lib/bbox";
 import type { ElevationResponse } from "@/lib/elevation/types";
 import { liftColor, runColor, type ColorScheme, type Rgb } from "@/lib/resort/colors";
+import { frontBearing } from "@/lib/resort/front";
 import type { ResortData } from "@/lib/resort/types";
 import { pointInShape, shapeAABBHalf, type Shape } from "@/lib/shape";
 import type { Bbox, LngLat } from "@/lib/types";
@@ -60,9 +61,57 @@ interface Builder {
   count: number;
 }
 
+/** The inputs that fix how lng/lat maps onto the model plane. */
+export type PlaneSpec = Pick<
+  RunMeshSpec,
+  "bbox" | "data" | "shape" | "widthInches" | "heightInches" | "rotation"
+>;
+
+interface Plane {
+  geoToLocal: (p: LngLat) => [number, number];
+  /** Full extent of the elevation grid in inches (the rotated shape's AABB). */
+  gridW: number;
+  gridH: number;
+  inPerMeter: number;
+}
+
+function modelPlane(spec: PlaneSpec): Plane {
+  const { bbox, shape, widthInches, heightInches, rotation } = spec;
+  const [aabbHalfW, aabbHalfH] = shapeAABBHalf(shape, widthInches, heightInches, rotation);
+  const gridW = aabbHalfW * 2;
+  const gridH = aabbHalfH * 2;
+  const inPerMeter = gridW / bboxWidthMeters(bbox);
+  const center = bboxCenter(bbox);
+  const mPerDegLng = metersPerDegLng(center[1]);
+  return {
+    geoToLocal: ([lng, lat]) => [
+      (lng - center[0]) * mPerDegLng * inPerMeter,
+      (lat - center[1]) * METERS_PER_DEG_LAT * inPerMeter,
+    ],
+    gridW,
+    gridH,
+    inPerMeter,
+  };
+}
+
+/**
+ * Bearing of the resort's base side (degrees clockwise from north), from
+ * the downhill direction of its runs and lifts over this terrain. Null
+ * when there is no clear front.
+ */
+export function resortFrontBearing(spec: PlaneSpec & { resort: ResortData }): number | null {
+  const { geoToLocal, gridW, gridH } = modelPlane(spec);
+  const lines = [...spec.resort.runs.filter((r) => !r.isArea), ...spec.resort.lifts];
+  return frontBearing({
+    paths: lines.map((l) => l.coords.map(geoToLocal)),
+    heightAt: heightSampler(spec.data, gridW, gridH, 0, 1),
+    halfWidth: gridW / 2,
+    halfHeight: gridH / 2,
+  });
+}
+
 export function buildRunRibbons(spec: RunMeshSpec): RibbonGroup[] {
   const {
-    bbox,
     data,
     shape,
     widthInches,
@@ -77,18 +126,7 @@ export function buildRunRibbons(spec: RunMeshSpec): RibbonGroup[] {
     lift,
   } = spec;
 
-  const [aabbHalfW, aabbHalfH] = shapeAABBHalf(shape, widthInches, heightInches, rotation);
-  const gridW = aabbHalfW * 2;
-  const gridH = aabbHalfH * 2;
-  const inPerMeter = gridW / bboxWidthMeters(bbox);
-  const center = bboxCenter(bbox);
-  const mPerDegLng = metersPerDegLng(center[1]);
-
-  const geoToLocal = ([lng, lat]: LngLat): [number, number] => [
-    (lng - center[0]) * mPerDegLng * inPerMeter,
-    (lat - center[1]) * METERS_PER_DEG_LAT * inPerMeter,
-  ];
-
+  const { geoToLocal, gridW, gridH, inPerMeter } = modelPlane(spec);
   const sampler = heightSampler(data, gridW, gridH, baseThicknessInches, inPerMeter * verticalExaggeration);
   const inside = (x: number, z: number) =>
     pointInShape(shape, x, z, widthInches, heightInches, rotation);

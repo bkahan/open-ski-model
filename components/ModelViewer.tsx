@@ -26,7 +26,7 @@ import {
 } from "@babylonjs/core";
 import { STLExport } from "@babylonjs/serializers/stl";
 import type { Manifold } from "manifold-3d";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   buildWatertight,
@@ -37,7 +37,7 @@ import { buildContourLines } from "@/lib/mesh/contours";
 import { buildModelSolids, unionForExport, type BuiltModel } from "@/lib/mesh/engrave";
 import { loadManifold, vertexDataFromManifold, type ColorAt } from "@/lib/mesh/manifold";
 import { plinthHeightInches } from "@/lib/mesh/plinth";
-import { buildRunRibbons } from "@/lib/mesh/runs";
+import { buildRunRibbons, resortFrontBearing } from "@/lib/mesh/runs";
 import { exportToStep } from "@/lib/mesh/step-export";
 import { loadFont } from "@/lib/mesh/text";
 import type { ElevationResponse } from "@/lib/elevation/types";
@@ -150,6 +150,16 @@ export default function ModelViewer({
 
   const [sunAzimuth, setSunAzimuth] = useState(135); // degrees
   const [showContours, setShowContours] = useState(true);
+
+  // The name plate goes on the resort's base side; without resort data
+  // (or a clear base side) it stays on the bottom edge of the frame.
+  const plateFacing = useMemo(
+    () =>
+      resort
+        ? resortFrontBearing({ bbox, data, shape, widthInches, heightInches, rotation, resort })
+        : null,
+    [bbox, data, shape, widthInches, heightInches, rotation, resort],
+  );
 
   // --- 1. Bootstrap engine + scene once ---
   useEffect(() => {
@@ -369,6 +379,7 @@ export default function ModelViewer({
             widthInches,
             heightInches,
             rotation,
+            facing: plateFacing ?? undefined,
             label: label ?? "",
             plinth: engraveLabel,
             brand: engraveBrand,
@@ -411,7 +422,7 @@ export default function ModelViewer({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label]);
+  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label, plateFacing]);
 
   // --- 2b. Runs + lifts draped on the terrain ---
   // Separate from the terrain rebuild so toggling lifts or changing the

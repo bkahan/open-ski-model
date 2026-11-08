@@ -9,7 +9,13 @@ import type * as opentype from "opentype.js";
 import type { Shape } from "@/lib/shape";
 
 import { manifoldFromMesh, withSolids, type TriMesh } from "./manifold";
-import { buildNameplateSolids, POCKET_DEPTH_IN, type NameplateLayout } from "./nameplate";
+import {
+  buildNameplateSolids,
+  plateTurnDeg,
+  POCKET_DEPTH_IN,
+  type NameplateLayout,
+  type PlateSide,
+} from "./nameplate";
 import { buildPlinthSolid, plinthHeightInches } from "./plinth";
 import { buildTextSolid, fontSizeForCapHeight, measureTextWidth } from "./text";
 
@@ -18,11 +24,7 @@ export const BRAND_TEXT = "craftedcarving.com";
 const BRAND_CAP_IN = 3 / MM_PER_INCH;
 const BRAND_OVERCUT_IN = 0.01;
 
-export interface ModelSpec {
-  shape: Shape;
-  widthInches: number;
-  heightInches: number;
-  rotation: number;
+export interface ModelSpec extends PlateSide {
   label: string;
   /** Plinth with name plate and compass. */
   plinth: boolean;
@@ -88,7 +90,9 @@ export function buildModelSolids(
 
     if (spec.brand) {
       const host = plinth ?? terrain;
-      const branded = cutBrand(m, font, host, spec.rotation);
+      // Same side as the plate, so it reads when the model is tipped
+      // over its front edge.
+      const branded = cutBrand(m, font, host, spec.rotation + plateTurnDeg(spec));
       if (branded) {
         own(branded);
         release(host);
@@ -106,14 +110,15 @@ export function buildModelSolids(
 
 /**
  * Cut the brand into the underside of `host` (bottom face on y = 0),
- * mirrored so it reads when the model is turned over. Returns null if
+ * mirrored so it reads when the model is turned over its south edge,
+ * then spun about y by `spin` (shapeOutline's degrees). Returns null if
  * the cut fails; the host is left untouched either way.
  */
 export function cutBrand(
   m: ManifoldToplevel,
   font: opentype.Font,
   host: Manifold,
-  rotation: number,
+  spin: number,
 ): Manifold | null {
   const size = fontSizeForCapHeight(font, BRAND_CAP_IN);
   const text = buildTextSolid(m, font, BRAND_TEXT, size, POCKET_DEPTH_IN + BRAND_OVERCUT_IN);
@@ -122,11 +127,10 @@ export function cutBrand(
   // Text in XY, extruded +Z. Turning the model over is a 180° flip, so
   // text that reads from below has glyph "right" along +x and "up"
   // along -z. Lay it flat that way with the extrusion pointing up into
-  // the body (y from -overcut to +depth), then follow the model's
-  // rotation.
+  // the body (y from -overcut to +depth), then spin it into place.
   const centered = text.translate([-width / 2, -BRAND_CAP_IN / 2, -BRAND_OVERCUT_IN]);
   const flat = centered.rotate([-90, 0, 0]);
-  const placed = flat.rotate([0, -rotation, 0]);
+  const placed = flat.rotate([0, -spin, 0]);
   const cut = m.Manifold.difference(host, placed);
   return withSolids([text, centered, flat, placed], () => {
     if (cut.status() !== "NoError" || cut.numTri() === 0) {

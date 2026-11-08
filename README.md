@@ -41,15 +41,17 @@ box, get a watertight `.stl` you can hand to your slicer.
   the terrain + plinth union used for export.
 
 - **Chamfered plinth with name plate.** A 15 mm rim at 35° all round. The
-  place name and a north arrow are cut into the south chamfer glyph by
-  glyph, so on a circular plinth they follow the cone. Cap height comes
+  place name and a north arrow are cut glyph by glyph into the chamfer
+  on the resort's base side (the mean downhill direction of its runs
+  and lifts; the frame's bottom edge when there is no resort), so on a
+  circular plinth they follow the cone. Cap height comes
   from the chamfer slope and shrinks (then shortens with "…") to fit the
   face, never below 3 mm. The pocket fill bodies are kept as separate
   inlays for multicolor printing.
 - **Optional plinth + engravings.**
   - *Label + compass:* a beveled plinth wraps the model and the place
-    name + a north-pointing arrow are inlaid into the south rim, tilted
-    35° so they face up on a desk.
+    name + a north-pointing arrow are inlaid into the rim on the base
+    side, tilted 35° so they face up on a desk.
   - *Brand on bottom:* `craftedcarving.com` engraved into the bottom
     face. Independent toggle.
 
