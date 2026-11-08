@@ -4,7 +4,7 @@ import { frontBearing, type PlanePoint } from "./front";
 
 // A peak at the origin; height falls off with distance.
 const peak = (x: number, z: number) => 1000 - Math.hypot(x, z);
-const bounds = { halfWidth: 10, halfHeight: 10 };
+const bounds = { inside: (x: number, z: number) => Math.abs(x) <= 10 && Math.abs(z) <= 10 };
 
 const line = (...pts: PlanePoint[]): PlanePoint[] => pts;
 
@@ -33,10 +33,23 @@ describe("frontBearing", () => {
     expect(bearing).toBeCloseTo(90, 5);
   });
 
-  it("ignores points outside the sampled area", () => {
+  it("ignores points off the model, even inside its bounding box", () => {
     const paths = [line([0, 0], [0, -30]), line([0, 0], [3, 0])];
-    const bearing = frontBearing({ paths, heightAt: peak, ...bounds })!;
-    expect(bearing).toBeCloseTo(90, 5);
+    expect(frontBearing({ paths, heightAt: peak, ...bounds })).toBeCloseTo(90, 5);
+    // A disc of radius 5: the south run's far end is inside the box
+    // but outside the disc, so only the on-model part votes.
+    const disc = (x: number, z: number) => Math.hypot(x, z) <= 5;
+    const corner = [line([0, 0], [0, -4], [0, -9]), line([0, 0], [2, 0])];
+    const bearing = frontBearing({ paths: corner, heightAt: peak, inside: disc })!;
+    // South run drops 4 on the disc, east run 2: between them, nearer south.
+    expect(bearing).toBeGreaterThan(135);
+    expect(bearing).toBeLessThan(180);
+  });
+
+  it("skips samples with no height", () => {
+    const holey = (x: number, z: number) => (z < -2 ? NaN : peak(x, z));
+    const paths = [line([0, 0], [0, -5]), line([0, 0], [3, 0])];
+    expect(frontBearing({ paths, heightAt: holey, ...bounds })).toBeCloseTo(90, 5);
   });
 
   it("returns null for a bowl with no front, and with no runs", () => {

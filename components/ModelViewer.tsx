@@ -36,6 +36,7 @@ import {
 import { buildContourLines } from "@/lib/mesh/contours";
 import { buildModelSolids, unionForExport, type BuiltModel } from "@/lib/mesh/engrave";
 import { loadManifold, vertexDataFromManifold, type ColorAt } from "@/lib/mesh/manifold";
+import { plateFacingDeg } from "@/lib/mesh/nameplate";
 import { plinthHeightInches } from "@/lib/mesh/plinth";
 import { buildRunRibbons, resortFrontBearing } from "@/lib/mesh/runs";
 import { exportToStep } from "@/lib/mesh/step-export";
@@ -64,8 +65,10 @@ interface Props {
   engraveLabel: boolean;
   engraveBrand: boolean;
   label?: string;
-  /** Runs + lifts to drape on the terrain; null draws none. */
+  /** The resort in frame, if any; it also decides which way the name plate faces. */
   resort: ResortData | null;
+  /** Drape the runs (and, with showLifts, the lifts) on the terrain. */
+  showRuns: boolean;
   colorScheme: ColorScheme;
   showLifts: boolean;
   minRunWidthMm: number;
@@ -129,6 +132,7 @@ export default function ModelViewer({
   engraveBrand,
   label,
   resort,
+  showRuns,
   colorScheme,
   showLifts,
   minRunWidthMm,
@@ -151,15 +155,16 @@ export default function ModelViewer({
   const [sunAzimuth, setSunAzimuth] = useState(135); // degrees
   const [showContours, setShowContours] = useState(true);
 
-  // The name plate goes on the resort's base side; without resort data
-  // (or a clear base side) it stays on the bottom edge of the frame.
-  const plateFacing = useMemo(
-    () =>
-      resort
-        ? resortFrontBearing({ bbox, data, shape, widthInches, heightInches, rotation, resort })
-        : null,
-    [bbox, data, shape, widthInches, heightInches, rotation, resort],
-  );
+  // The name plate (and the brand with it) goes on the resort's base
+  // side; without resort data, or a clear base side, it stays on the
+  // bottom edge of the frame. Snapped to the face it will actually use,
+  // so a refreshed resort that lands on the same face rebuilds nothing.
+  const plateFacing = useMemo(() => {
+    if (!resort || !(engraveLabel || engraveBrand)) return undefined;
+    const side = { shape, widthInches, heightInches, rotation };
+    const front = resortFrontBearing({ bbox, data, ...side, resort });
+    return front === null ? undefined : plateFacingDeg({ ...side, facing: front });
+  }, [bbox, data, shape, widthInches, heightInches, rotation, resort, engraveLabel, engraveBrand]);
 
   // --- 1. Bootstrap engine + scene once ---
   useEffect(() => {
@@ -379,7 +384,7 @@ export default function ModelViewer({
             widthInches,
             heightInches,
             rotation,
-            facing: plateFacing ?? undefined,
+            facing: plateFacing,
             label: label ?? "",
             plinth: engraveLabel,
             brand: engraveBrand,
@@ -436,7 +441,7 @@ export default function ModelViewer({
       m.dispose();
     }
     ribbonsRef.current = [];
-    if (!resort) return;
+    if (!resort || !showRuns) return;
 
     const groups = buildRunRibbons({
       bbox,
@@ -479,6 +484,7 @@ export default function ModelViewer({
     verticalExaggeration,
     engraveLabel,
     resort,
+    showRuns,
     colorScheme,
     showLifts,
     minRunWidthMm,

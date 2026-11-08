@@ -100,13 +100,14 @@ function modelPlane(spec: PlaneSpec): Plane {
  * when there is no clear front.
  */
 export function resortFrontBearing(spec: PlaneSpec & { resort: ResortData }): number | null {
+  const { shape, widthInches, heightInches, rotation, resort } = spec;
   const { geoToLocal, gridW, gridH } = modelPlane(spec);
-  const lines = [...spec.resort.runs.filter((r) => !r.isArea), ...spec.resort.lifts];
+  const lines = [...resort.runs.filter((r) => !r.isArea), ...resort.lifts];
   return frontBearing({
     paths: lines.map((l) => l.coords.map(geoToLocal)),
+    // Only relative heights matter here, so no base and no exaggeration.
     heightAt: heightSampler(spec.data, gridW, gridH, 0, 1),
-    halfWidth: gridW / 2,
-    halfHeight: gridH / 2,
+    inside: (x, z) => pointInShape(shape, x, z, widthInches, heightInches, rotation),
   });
 }
 

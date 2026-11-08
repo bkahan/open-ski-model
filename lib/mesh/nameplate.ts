@@ -22,6 +22,7 @@
 import type { Manifold, ManifoldToplevel } from "manifold-3d";
 import type * as opentype from "opentype.js";
 
+import { normalizeDeg } from "@/lib/angle";
 import type { Shape } from "@/lib/shape";
 
 import { compassContour, rotateContour } from "./compass";
@@ -97,12 +98,8 @@ interface Face {
  * bearing 180 − (t + rotation), so t = 180 − facing − rotation.
  */
 function wantedTurn(side: PlateSide): number {
-  if (side.facing === undefined) return 0;
+  if (side.facing === undefined || !Number.isFinite(side.facing)) return 0;
   return normalizeDeg(180 - side.facing - side.rotation);
-}
-
-function normalizeDeg(deg: number): number {
-  return ((deg % 360) + 360) % 360;
 }
 
 function snapTurn(turn: number, stepDeg: number): number {
@@ -117,8 +114,17 @@ export function plateTurnDeg(side: PlateSide): number {
     case "hexagon":
       return snapTurn(wantedTurn(side), 60);
     case "circle":
-      return wantedTurn(side);
+      return snapTurn(wantedTurn(side), 1);
   }
+}
+
+/**
+ * The bearing the plate ends up facing once snapped to a face (or to a
+ * whole degree on a circle). Feeding this back in as `facing` gives the
+ * same plate, which makes it a stable key for rebuilds.
+ */
+export function plateFacingDeg(side: PlateSide): number {
+  return normalizeDeg(180 - plateTurnDeg(side) - side.rotation);
 }
 
 function plateFace(spec: NameplateSpec, rim: number): Face {

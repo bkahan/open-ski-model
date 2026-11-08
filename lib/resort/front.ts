@@ -7,6 +7,8 @@
 // A bowl of runs fanning out in every direction has no front; the
 // downhill vectors cancel and the result is null.
 
+import { normalizeDeg } from "@/lib/angle";
+
 export type PlanePoint = [number, number];
 
 export interface FrontSpec {
@@ -14,9 +16,8 @@ export interface FrontSpec {
   paths: PlanePoint[][];
   /** Surface height at a plane point, in any unit (only ratios matter). */
   heightAt: (x: number, z: number) => number;
-  /** Half-extents of the sampled area; points outside are ignored. */
-  halfWidth: number;
-  halfHeight: number;
+  /** Whether a plane point is on the model; points off it don't vote. */
+  inside: (x: number, z: number) => boolean;
 }
 
 /**
@@ -27,7 +28,7 @@ const MIN_AGREEMENT = 0.25;
 
 /** Geographic bearing of the base side in degrees clockwise from north, or null. */
 export function frontBearing(spec: FrontSpec): number | null {
-  const { paths, heightAt, halfWidth, halfHeight } = spec;
+  const { paths, heightAt, inside } = spec;
   let sumX = 0;
   let sumZ = 0;
   let totalDrop = 0;
@@ -38,8 +39,9 @@ export function frontBearing(spec: FrontSpec): number | null {
     let topH = -Infinity;
     let bottomH = Infinity;
     for (const p of path) {
-      if (Math.abs(p[0]) > halfWidth || Math.abs(p[1]) > halfHeight) continue;
+      if (!inside(p[0], p[1])) continue;
       const h = heightAt(p[0], p[1]);
+      if (!Number.isFinite(h)) continue;
       if (h > topH) {
         topH = h;
         top = p;
@@ -62,6 +64,5 @@ export function frontBearing(spec: FrontSpec): number | null {
 
   if (totalDrop === 0) return null;
   if (Math.hypot(sumX, sumZ) < MIN_AGREEMENT * totalDrop) return null;
-  const deg = (Math.atan2(sumX, sumZ) * 180) / Math.PI;
-  return ((deg % 360) + 360) % 360;
+  return normalizeDeg((Math.atan2(sumX, sumZ) * 180) / Math.PI);
 }

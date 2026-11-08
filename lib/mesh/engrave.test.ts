@@ -9,9 +9,9 @@ import type { ElevationResponse } from "@/lib/elevation/types";
 import type { Shape } from "@/lib/shape";
 import type { Bbox } from "@/lib/types";
 
-import { buildModelSolids, unionForExport } from "./engrave";
+import { buildModelSolids, cutBrand, unionForExport } from "./engrave";
 import { withSolids } from "./manifold";
-import { buildNameplateSolids, fitNameplate, plateTurnDeg } from "./nameplate";
+import { buildNameplateSolids, fitNameplate, plateFacingDeg, plateTurnDeg } from "./nameplate";
 import { buildPlinthSolid, plinthHeightInches, RIM_IN } from "./plinth";
 import { buildShapedWatertight, buildWatertight } from "./watertight";
 
@@ -103,11 +103,27 @@ describe("plateTurnDeg", () => {
     expect(plateTurnDeg({ ...rect, rotation: 0, facing: 0 })).toBe(180);
   });
 
-  it("snaps to faces: 90° on rectangles, 60° on hexagons, none on circles", () => {
+  it("snaps to faces: 90° on rectangles, 60° on hexagons, whole degrees on circles", () => {
     expect(plateTurnDeg({ ...rect, rotation: 0, facing: 130 })).toBe(90);
     expect(plateTurnDeg({ ...rect, rotation: 0, facing: 140 })).toBe(0);
-    expect(plateTurnDeg({ shape: "hexagon", widthInches: 6, heightInches: 5.2, rotation: 0, facing: 45 })).toBe(120);
-    expect(plateTurnDeg({ shape: "circle", widthInches: 6, heightInches: 6, rotation: 0, facing: 45 })).toBe(135);
+    const hex = { shape: "hexagon" as Shape, widthInches: 6, heightInches: 5.2 };
+    expect(plateTurnDeg({ ...hex, rotation: 0, facing: 45 })).toBe(120);
+    expect(plateTurnDeg({ ...hex, rotation: -30, facing: 45 })).toBe(180);
+    expect(plateTurnDeg({ ...hex, rotation: 450, facing: 0 })).toBe(120);
+    expect(plateTurnDeg({ shape: "circle", widthInches: 6, heightInches: 6, rotation: 0, facing: 45.4 })).toBe(135);
+  });
+
+  it("treats a facing that is not a number as none", () => {
+    expect(plateTurnDeg({ ...rect, rotation: 20, facing: NaN })).toBe(0);
+    expect(plateTurnDeg({ ...rect, rotation: 20, facing: Infinity })).toBe(0);
+  });
+
+  it("reports the bearing the snapped plate actually faces, and that is a fixed point", () => {
+    const side = { ...rect, rotation: 30, facing: 100 };
+    const snapped = plateFacingDeg(side);
+    expect(snapped).toBe(60);
+    expect(plateFacingDeg({ ...side, facing: snapped })).toBe(snapped);
+    expect(plateTurnDeg({ ...side, facing: snapped })).toBe(plateTurnDeg(side));
   });
 });
 
@@ -218,6 +234,25 @@ describe("buildModelSolids", () => {
       plain.delete();
       expect(union.status()).toBe("NoError");
       expect(union.volume()).toBeCloseTo(built.terrain.volume() + built.plinth!.volume(), 3);
+    });
+  });
+
+  it("turns the brand with the plate", () => {
+    const plain = buildPlinthSolid(m, { shape: "rectangle", ...base, widthInches: 8 });
+    const south = cutBrand(m, font, plain, 0)!;
+    const east = cutBrand(m, font, plain, 90)!;
+    withSolids([plain, south, east], () => {
+      // Same material removed either way, but the pocket lies along a
+      // different axis: the text is wider than it is tall.
+      expect(east.volume()).toBeCloseTo(south.volume(), 4);
+      const extent = (s: typeof plain, axis: number) => {
+        const diff = m.Manifold.difference(plain, s);
+        const box = diff.boundingBox();
+        diff.delete();
+        return box.max[axis] - box.min[axis];
+      };
+      expect(extent(south, 0)).toBeGreaterThan(extent(south, 2) * 3);
+      expect(extent(east, 2)).toBeGreaterThan(extent(east, 0) * 3);
     });
   });
 

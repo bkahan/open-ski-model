@@ -4,7 +4,7 @@ import type { ElevationResponse } from "@/lib/elevation/types";
 import type { ResortData } from "@/lib/resort/types";
 import type { Bbox } from "@/lib/types";
 
-import { buildRunRibbons, type RunMeshSpec } from "./runs";
+import { buildRunRibbons, resortFrontBearing, type RunMeshSpec } from "./runs";
 
 // 6" square frame centered on Jay Peak; roughly 1:33,000.
 const bbox: Bbox = [-72.53, 44.91, -72.47, 44.95];
@@ -122,5 +122,44 @@ describe("buildRunRibbons", () => {
       const d = Math.hypot(positions[i], positions[i + 2]);
       expect(d).toBeLessThanOrEqual(r + 0.1);
     }
+  });
+});
+
+describe("resortFrontBearing", () => {
+  // Terrain that falls to the north-east: row 0 is the north edge, so
+  // height drops with i and with decreasing j.
+  function tilted(size: number): ElevationResponse {
+    const heights: number[] = [];
+    for (let j = 0; j < size; j++) {
+      for (let i = 0; i < size; i++) heights.push(1000 - 10 * i - 10 * (size - 1 - j));
+    }
+    return { heights, width: size, height: size, min: 0, max: 1000, source: "terrarium", zoom: 12 };
+  }
+  const plane = { bbox, data: tilted(16), shape: "rectangle" as const, widthInches: 6, heightInches: 6, rotation: 0 };
+
+  it("maps lng/lat onto the plane the right way round", () => {
+    // A run drawn uphill (east to west) still counts as descending east;
+    // a lift from the SW corner to the NE corner descends north-east.
+    const resort: ResortData = {
+      runs: [{ ...centerRun, coords: [[-72.49, 44.93], [-72.51, 44.93]] }],
+      lifts: [{ id: "9", type: "chair_lift", coords: [[-72.52, 44.92], [-72.48, 44.94]] }],
+      bbox,
+      extent: bbox,
+      convention: "north_america",
+    };
+    const bearing = resortFrontBearing({ ...plane, resort })!;
+    expect(bearing).toBeGreaterThan(45);
+    expect(bearing).toBeLessThan(90);
+  });
+
+  it("ignores area runs and gives null without any lines", () => {
+    const resort: ResortData = {
+      runs: [{ ...centerRun, isArea: true }],
+      lifts: [],
+      bbox,
+      extent: bbox,
+      convention: "north_america",
+    };
+    expect(resortFrontBearing({ ...plane, resort })).toBeNull();
   });
 });

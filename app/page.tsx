@@ -711,7 +711,8 @@ export default function Home() {
             engraveLabel={engraveLabel}
             engraveBrand={engraveBrand}
             label={snapshot.label}
-            resort={resortSettings.showRuns ? resort : null}
+            resort={resort}
+            showRuns={resortSettings.showRuns}
             colorScheme={resolvedScheme}
             showLifts={resortSettings.showLifts}
             minRunWidthMm={resortSettings.minRunWidthMm}
