@@ -42,7 +42,7 @@ export interface Palette {
   base: [number, number, number];
 }
 
-const DEFAULT_PALETTE: Palette = {
+export const DEFAULT_PALETTE: Palette = {
   surface: hypsometric,
   base: [0.18, 0.20, 0.25],
 };
@@ -107,29 +107,56 @@ export function buildWatertight(
     }
   }
 
-  // ---------- 2. BOTTOM (4 corners → 2 triangles) ----------
-  const SW = positions.length / 3;
-  positions.push(-W / 2, 0, -H / 2); pushColor(palette.base);
-  const SE = positions.length / 3;
-  positions.push(+W / 2, 0, -H / 2); pushColor(palette.base);
-  const NW = positions.length / 3;
-  positions.push(-W / 2, 0, +H / 2); pushColor(palette.base);
-  const NE = positions.length / 3;
-  positions.push(+W / 2, 0, +H / 2); pushColor(palette.base);
-  // CW from above → -Y normal (so the bottom faces down).
-  indices.push(SW, SE, NE, SW, NE, NW);
+  // ---------- 2. BOTTOM PERIMETER RING ----------
+  // One vertex at y = 0 under every perimeter top vertex, in order around
+  // the footprint: north row west→east, east column north→south, south
+  // row east→west, west column south→north. The walls and the bottom
+  // face both index into this ring, so the base has no T-junctions and
+  // the solid is manifold for boolean work.
+  const ringStart = positions.length / 3;
+  const ringLen = 2 * gw + 2 * gh - 4;
+  const pushRing = (x: number, z: number) => {
+    positions.push(x, 0, z);
+    pushColor(palette.base);
+  };
+  for (let i = 0; i < gw; i++) pushRing(xAt(i), +H / 2);
+  for (let j = 1; j < gh; j++) pushRing(+W / 2, zAt(j));
+  for (let i = gw - 2; i >= 0; i--) pushRing(xAt(i), -H / 2);
+  for (let j = gh - 2; j >= 1; j--) pushRing(-W / 2, zAt(j));
+  const ring = (k: number) => ringStart + ((k % ringLen) + ringLen) % ringLen;
+
+  // Ring positions of the four corners, for the walls below.
+  const NW = 0;
+  const NE = gw - 1;
+  const SE = gw - 1 + (gh - 1);
+  const SW = SE + (gw - 1);
+
+  // Bottom face: fan from a center vertex over a second copy of the ring
+  // (same positions, own normals, so the crease to the walls stays
+  // sharp; the copies merge by position for boolean work). The ring runs
+  // clockwise seen from above, so (center, next, current) → -Y normal.
+  const bottomRingStart = positions.length / 3;
+  for (let k = 0; k < ringLen; k++) {
+    const r = ring(k) * 3;
+    pushRing(positions[r], positions[r + 2]);
+  }
+  const bottomRing = (k: number) => bottomRingStart + (k % ringLen);
+  const bottomCenter = positions.length / 3;
+  positions.push(0, 0, 0);
+  pushColor(palette.base);
+  for (let k = 0; k < ringLen; k++) {
+    indices.push(bottomCenter, bottomRing(k + 1), bottomRing(k));
+  }
 
   // ---------- 3. SIDE WALLS ----------
   // Helper: build one wall strip. `topRow` enumerates (k, x, z) pairs for
-  // the top edge in order; orient = whether to flip winding for the
-  // outward normal.
+  // the top edge in order; `ringAt(i)` gives the ring index under top[i];
+  // outwardFlip picks the winding that faces outward.
   type WallVertex = { k: number; x: number; z: number };
   const buildWall = (
     topRow: WallVertex[],
     outwardFlip: boolean,
-    /** indices in the master arrays of the bottom-edge endpoints */
-    leftBot: number,
-    rightBot: number,
+    ringAt: (i: number) => number,
   ) => {
     const wallStart = positions.length / 3;
 
@@ -138,26 +165,13 @@ export function buildWatertight(
       positions.push(v.x, topY[v.k], v.z);
       pushColor(palette.base);
     }
-    // Bottom vertices — except for the two corners which we share with the
-    // bottom face. We push interior bottom vertices into our own block
-    // and refer to leftBot / rightBot for the corners.
-    const n = topRow.length;
-    const interiorBotStart = positions.length / 3;
-    for (let i = 1; i < n - 1; i++) {
-      positions.push(topRow[i].x, 0, topRow[i].z);
-      pushColor(palette.base);
-    }
-    const botIndex = (i: number) => {
-      if (i === 0) return leftBot;
-      if (i === n - 1) return rightBot;
-      return interiorBotStart + (i - 1);
-    };
 
+    const n = topRow.length;
     for (let i = 0; i < n - 1; i++) {
       const V0 = wallStart + i;          // top[i]
       const V1 = wallStart + i + 1;      // top[i+1]
-      const V2 = botIndex(i);            // bot[i]
-      const V3 = botIndex(i + 1);        // bot[i+1]
+      const V2 = ringAt(i);              // bot[i]
+      const V3 = ringAt(i + 1);          // bot[i+1]
       if (outwardFlip) {
         indices.push(V0, V1, V2, V1, V3, V2);
       } else {
@@ -170,7 +184,7 @@ export function buildWatertight(
   buildWall(
     Array.from({ length: gw }, (_, i) => ({ k: i, x: xAt(i), z: +H / 2 })),
     false,
-    NW, NE,
+    (i) => ring(NW + i),
   );
   // SOUTH wall — j=gh-1 row, z = -H/2, outward normal = -Z, FLIP.
   buildWall(
@@ -180,7 +194,7 @@ export function buildWatertight(
       z: -H / 2,
     })),
     true,
-    SW, SE,
+    (i) => ring(SW - i),
   );
   // WEST wall — i=0 column, x = -W/2, outward normal = -X.
   // We walk north→south, so going forward decreases z. With our default
@@ -192,7 +206,7 @@ export function buildWatertight(
       z: zAt(j),
     })),
     true,
-    NW, SW,
+    (j) => ring(NW - j),
   );
   // EAST wall — i=gw-1 column, x = +W/2, outward normal = +X, FLIP.
   buildWall(
@@ -202,7 +216,7 @@ export function buildWatertight(
       z: zAt(j),
     })),
     false,
-    NE, SE,
+    (j) => ring(NE + j),
   );
 
   // ---------- Pack into typed arrays ----------

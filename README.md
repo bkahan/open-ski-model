@@ -32,14 +32,26 @@ box, get a watertight `.stl` you can hand to your slicer.
 
   ![Shape options: rectangle / circle / hexagon](docs/images/shapes.png)
 
-- **Watertight mesh, CSG-engraved.** Top surface + side walls + bottom
-  face, all oriented with consistent outward normals — safe for any
-  slicer. Engravings (label, compass, brand) are cut with a real CSG
-  pass via Manifold, so the result stays watertight after subtraction.
+- **Watertight mesh, boolean-engraved.** Top surface + side walls + bottom
+  face, all oriented with consistent outward normals and free of
+  T-junctions, so the solid is manifold. All booleans run in
+  [Manifold](https://github.com/elalish/manifold) (WASM), which handles a
+  130k-triangle terrain in well under a second: the brand on the
+  underside, the name plate and north arrow in the plinth's chamfer, and
+  the terrain + plinth union used for export.
+
+- **Chamfered plinth with name plate.** A 15 mm rim at 35° all round. The
+  place name and a north arrow are cut glyph by glyph into the chamfer
+  on the resort's base side (the mean downhill direction of its runs
+  and lifts; the frame's bottom edge when there is no resort), so on a
+  circular plinth they follow the cone. Cap height comes
+  from the chamfer slope and shrinks (then shortens with "…") to fit the
+  face, never below 3 mm. The pocket fill bodies are kept as separate
+  inlays for multicolor printing.
 - **Optional plinth + engravings.**
   - *Label + compass:* a beveled plinth wraps the model and the place
-    name + a north-pointing arrow are inlaid into the south rim, tilted
-    35° so they face up on a desk.
+    name + a north-pointing arrow are inlaid into the rim on the base
+    side, tilted 35° so they face up on a desk.
   - *Brand on bottom:* `craftedcarving.com` engraved into the bottom
     face. Independent toggle.
 
@@ -64,9 +76,23 @@ box, get a watertight `.stl` you can hand to your slicer.
   is wrapped as a single `MANIFOLD_SOLID_BREP`. Fusion / SolidWorks /
   FreeCAD open it as one selectable object. Units are declared as mm.
 
+- **Ski runs and lifts.** Downhill runs and lifts come from
+  [OpenSkiData](https://openskidata.org) (OpenSkiMap's processed OSM
+  data), rebuilt weekly by a GitHub Action into 1° cells on the `data`
+  branch and served through jsDelivr, so no query server sits in the
+  request path. They're drawn on the map and draped on the 3D terrain,
+  colored by difficulty. The search box lists ski resorts from the same
+  dataset; picking one turns and fits the frame to the resort's natural
+  viewport. Trail colors follow the convention the data was tagged under
+  (North America green / blue / black, Europe and Japan blue / red /
+  black) or can be set by hand. Lifts are a toggle; runs narrower than
+  the adjustable minimum width (1.2 mm) are widened so they print.
+  Multicolor inlay bodies and 3MF export are next — see
+  `docs/roadmap.md`.
+
 - **Share-by-URL.** Every change to the bbox / shape / rotation / size /
-  density / engraving toggles / exaggeration is mirrored to the URL, so
-  a deep link reopens the same model.
+  density / engraving toggles / exaggeration / run settings is mirrored
+  to the URL, so a deep link reopens the same model.
 - **Installable PWA.** Manifest + service worker (Serwist). App shell and
   static assets cache; map tiles cached opportunistically.
 
@@ -75,9 +101,16 @@ box, get a watertight `.stl` you can hand to your slicer.
 ```bash
 # Create .env.local with your MapTiler key (free at https://www.maptiler.com/cloud/)
 echo 'NEXT_PUBLIC_MAPTILER_KEY=your_key_here' > .env.local
-npm install
+npm install   # also copies manifold-3d's WASM into public/manifold.wasm
 npm run dev
+npm test      # unit tests (Vitest)
 ```
+
+Ski-run data is read from the `data` branch via jsDelivr by default. To
+work against a local build of it, run
+`node scripts/build-ski-data.mjs out` (downloads ~1 GB from OpenSkiData;
+one download per day is their limit), serve `out/` with any static
+server, and set `SKI_DATA_BASE` to its URL in `.env.local`.
 
 Open <http://localhost:3000>.
 
@@ -132,10 +165,11 @@ outward, the volume is well-defined.
 
 For non-rectangular shapes the grid is masked to the inscribed circle or
 hexagon and the side walls follow the shape's perimeter (with optional
-rotation). Engravings — the plinth label, the compass arrow, and the
-brand mark — are cut with a real CSG difference via Manifold against
-extruded glyph / arrow geometry, so the model stays watertight even
-after the subtraction.
+rotation). The rectangle's bottom face is a fan over the wall perimeter
+ring (not a single quad), so every base edge is shared by exactly two
+triangles. The brand mark is cut with a Manifold boolean difference
+against extruded glyph outlines (`lib/mesh/manifold.ts`,
+`lib/mesh/text.ts`), so the model stays watertight after the subtraction.
 
 Scene units are inches. Vertical scale is
 `elevation_m × (print_width_in / bbox_width_m) × verticalExaggeration`,
@@ -171,6 +205,10 @@ are fused in by position dedup so the export stays a single solid.
 | `eb`    | `0` to disable the bottom brand engraving (on by default) |
 | `t`     | base thickness, inches                                 |
 | `v`     | vertical exaggeration                                  |
+| `runs`  | `0` to hide ski runs (on by default)                   |
+| `lf`    | `0` to hide lifts (on by default)                      |
+| `mw`    | minimum run width in mm (omitted at the default 1.2)   |
+| `cs`    | trail color scheme `na` \| `eu` (omitted when auto)    |
 | `label` | display name (URL-encoded)                             |
 
 Example:
@@ -186,6 +224,8 @@ The page reads this on mount and rebuilds the picker / model spec.
 ```
 app/
   api/elevation/route.ts   POST handler (dispatch terrarium / USGS)
+  api/resort/route.ts      POST handler (runs + lifts from the data cells)
+  api/resort/search/       GET handler (ski-area name search)
   layout.tsx               Root + RegisterSW + metadata
   not-found.tsx            404 page (required by Next 16 at build time)
   page.tsx                 Map ↔ viewer state machine
@@ -198,6 +238,7 @@ components/
   SizeControls.tsx         Print-size + exaggeration inputs
   DensityControls.tsx      Mesh-density preset + custom slider
   EngravingControls.tsx    Label/compass + brand toggles
+  ResortControls.tsx       Runs / lifts / min width / color scheme
   RegisterSW.tsx           Service-worker registration
 lib/
   bbox.ts                  Bbox math (small-angle approx)
@@ -206,8 +247,25 @@ lib/
     terrarium.ts           Tile math + PNG decoding (server)
     usgs.ts                3DEP exportImage + GeoTIFF parsing (server)
     types.ts               Request/response types
-  mesh/
+  resort/
+    skidata.ts             Data-branch cell reader + ski-area search (server)
+    request.ts             /api/resort request validation
+    colors.ts              Difficulty → color per scheme
+    geojson.ts             Resort data → GeoJSON for the map
+    settings.ts            Run settings defaults + limits
+    types.ts               Run / lift / response types
+scripts/
+  build-ski-data.mjs       OpenSkiData → cells + index (run by the Action)
+  copy-manifold-wasm.mjs   Copies manifold.wasm into public/
+lib/mesh/
+    manifold.ts            Manifold (WASM) loader + mesh conversions
+    engrave.ts             Plinth + name plate + brand + export union
+    plinth.ts              Chamfered plinth solid (hull of offset outlines)
+    nameplate.ts           Glyph placement on the chamfer, font fitting
+    compass.ts             North-arrow outline
+    text.ts                Font loading, glyph outlines, text solids
     watertight.ts          Build closed VertexData from height grid
+    runs.ts                Drape runs + lifts as ribbons, one per color
     contours.ts            Marching squares contour lines
     plinth.ts              Beveled plinth around the model
     compass.ts             North-arrow indicator geometry

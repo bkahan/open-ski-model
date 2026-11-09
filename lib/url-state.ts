@@ -6,6 +6,8 @@
 //   /?b=-72.520,44.910,-72.480,44.950&s=6x6&t=0.25&v=2&label=Jay%20Peak
 //   /?b=-122.97,50.10,-122.91,50.14&s=8x6&t=0.25&v=2.5&label=Whistler
 
+import { isColorSchemeSetting, type ColorSchemeSetting } from "@/lib/resort/colors";
+import { DEFAULT_RESORT_SETTINGS } from "@/lib/resort/settings";
 import type { Shape } from "@/lib/shape";
 import type { Bbox } from "@/lib/types";
 
@@ -21,6 +23,10 @@ export interface UrlState {
   gridSize: number;
   engraveLabel: boolean;
   engraveBrand: boolean;
+  showRuns: boolean;
+  showLifts: boolean;
+  minRunWidthMm: number;
+  colorScheme: ColorSchemeSetting;
   label?: string;
 }
 
@@ -37,6 +43,12 @@ export function encodeUrlState(s: UrlState): URLSearchParams {
   if (s.engraveLabel) params.set("el", "1");
   // Default-on toggle: persist "0" only when disabled.
   if (!s.engraveBrand) params.set("eb", "0");
+  if (!s.showRuns) params.set("runs", "0");
+  if (!s.showLifts) params.set("lf", "0");
+  if (s.minRunWidthMm !== DEFAULT_RESORT_SETTINGS.minRunWidthMm) {
+    params.set("mw", trim(s.minRunWidthMm));
+  }
+  if (s.colorScheme !== "auto") params.set("cs", s.colorScheme);
   params.set("t", trim(s.baseThicknessInches));
   params.set("v", trim(s.verticalExaggeration));
   if (s.label) params.set("label", s.label);
@@ -74,6 +86,12 @@ export function decodeUrlState(params: URLSearchParams): Partial<UrlState> {
   if (el === "1") out.engraveLabel = true;
   const eb = params.get("eb");
   if (eb === "0") out.engraveBrand = false;
+  if (params.get("runs") === "0") out.showRuns = false;
+  if (params.get("lf") === "0") out.showLifts = false;
+  const mw = params.get("mw");
+  if (mw && Number.isFinite(Number(mw)) && Number(mw) > 0) out.minRunWidthMm = Number(mw);
+  const cs = params.get("cs");
+  if (cs && isColorSchemeSetting(cs)) out.colorScheme = cs;
   const t = params.get("t");
   if (t && Number.isFinite(Number(t))) out.baseThicknessInches = Number(t);
   const v = params.get("v");
