@@ -6,6 +6,7 @@ const base: UrlState = {
   bbox: [-72.52, 44.91, -72.48, 44.95],
   shape: "rectangle",
   silhouette: false,
+  layerCount: 0,
   rotation: 0,
   widthInches: 6,
   heightInches: 6,
@@ -27,6 +28,14 @@ describe("model height url state", () => {
     const params = encodeUrlState({ ...base, reliefInches: 1.75 });
     expect(params.get("rh")).toBe("1.75");
     expect(decodeUrlState(params).reliefInches).toBe(1.75);
+  });
+
+  it("round-trips the stacked finish and omits it when smooth", () => {
+    expect(encodeUrlState(base).has("ln")).toBe(false);
+    expect(decodeUrlState(encodeUrlState({ ...base, layerCount: 8 })).layerCount).toBe(8);
+    for (const bad of ["abc", "0", "2", "17", "999999999", "4.5"]) {
+      expect(decodeUrlState(new URLSearchParams(`ln=${bad}`)).layerCount).toBeUndefined();
+    }
   });
 
   it("round-trips the resort outline", () => {

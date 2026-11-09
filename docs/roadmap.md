@@ -70,10 +70,12 @@ no visible text. Replacing both:
 - With the name on, a 4 mm slab follows the outline with a flat tab on
   the base side carrying the name and rose; the brand goes under the tab.
 
-### Finish options — next
+### Stacked finish (done)
 
-- Stacked flat elevation layers as a toggle against smooth terrain, with
-  white snow.
+- Smooth or Stacked, 3–16 flat steps (8 by default). Each step is the
+  terrain's cross-section at that height, smoothed for printing and kept
+  inside the step below. Step heights are whole multiples of 0.2 mm.
+- Runs and lifts sit on the flat tops; contour lines are off.
 
 ### Phase R2 — inlay bodies
 

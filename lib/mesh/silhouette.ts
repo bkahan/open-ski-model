@@ -72,7 +72,7 @@ function segmentQuad(a: [number, number], b: [number, number], halfWidth: number
 }
 
 /** Runs each step on the last result, freeing every intermediate section. */
-function pipeSections(
+export function pipeSections(
   start: CrossSection,
   steps: Array<(s: CrossSection) => CrossSection>,
 ): CrossSection {

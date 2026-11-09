@@ -44,7 +44,12 @@ import {
 } from "@/lib/mesh/silhouette";
 import type { Contour } from "@/lib/mesh/text";
 import { plinthHeightInches } from "@/lib/mesh/plinth";
-import { buildRunRibbons, resortFrontBearing, resortLinesOnPlane } from "@/lib/mesh/runs";
+import {
+  buildRunRibbons,
+  resortFrontBearing,
+  resortLinesOnPlane,
+  terrainLayersFor,
+} from "@/lib/mesh/runs";
 import { exportToStep } from "@/lib/mesh/step-export";
 import { loadFont } from "@/lib/mesh/text";
 import type { ElevationResponse } from "@/lib/elevation/types";
@@ -76,6 +81,8 @@ interface Props {
   resort: ResortData | null;
   /** Cut the model to the resort's outline when there is one. */
   silhouette: boolean;
+  /** Stack the terrain into this many flat steps; 0 keeps it smooth. */
+  layerCount: number;
   /** Drape the runs (and, with showLifts, the lifts) on the terrain. */
   showRuns: boolean;
   colorScheme: ColorScheme;
@@ -142,6 +149,7 @@ export default function ModelViewer({
   label,
   resort,
   silhouette,
+  layerCount,
   showRuns,
   colorScheme,
   showLifts,
@@ -230,6 +238,25 @@ export default function ModelViewer({
     const [halfW, halfH] = shapeAABBHalf(shape, widthInches, heightInches, rotation);
     return outlineMask(outline, halfW * 2, halfH * 2, data.width, data.height);
   }, [outline, shape, widthInches, heightInches, rotation, data.width, data.height]);
+
+  const layers = useMemo(
+    () =>
+      layerCount > 0
+        ? terrainLayersFor({
+            bbox,
+            data,
+            shape,
+            widthInches,
+            heightInches,
+            rotation,
+            baseThicknessInches,
+            verticalExaggeration,
+            count: layerCount,
+            insideOutline,
+          })
+        : null,
+    [layerCount, bbox, data, shape, widthInches, heightInches, rotation, baseThicknessInches, verticalExaggeration, insideOutline],
+  );
 
   // --- 1. Bootstrap engine + scene once ---
   useEffect(() => {
@@ -378,6 +405,7 @@ export default function ModelViewer({
     // shapes, mask off cells outside the shape so the lines stop at the
     // same staircase boundary the mesh uses.
     contoursRef.current?.dispose();
+    contoursRef.current = null;
     // When `needsMask`, the contour grid must use the same AABB extent
     // as the mesh; otherwise the marching-squares cells won't line up
     // with the masked geometry.
@@ -412,7 +440,8 @@ export default function ModelViewer({
       cellKept,
     });
 
-    if (contourData.indices.length > 0) {
+    // Stacked steps are their own contour lines.
+    if (!layers && contourData.indices.length > 0) {
       const lines: Vector3[][] = [];
       const pos = contourData.positions;
       for (let k = 0; k < contourData.indices.length; k += 2) {
@@ -439,7 +468,7 @@ export default function ModelViewer({
     // Font and WASM load once; after that the whole pass takes well
     // under a second even at high density. Results replace the plain
     // meshes above unless the inputs changed meanwhile.
-    if (engraveLabel || engraveBrand || outline) {
+    if (engraveLabel || engraveBrand || outline || layers) {
       const positions = vertexData.positions;
       const indices = vertexData.indices;
       (async () => {
@@ -456,6 +485,7 @@ export default function ModelViewer({
             plinth: engraveLabel,
             brand: engraveBrand,
             outline,
+            layers,
           });
           if (cancelled) {
             freeBuilt(built);
@@ -463,7 +493,7 @@ export default function ModelViewer({
           }
           builtRef.current = built;
 
-          if ((engraveBrand && !built.plinth) || outline) {
+          if ((engraveBrand && !built.plinth) || outline || layers) {
             const topY = terrain.getBoundingInfo().boundingBox.maximum.y;
             const branded = meshFromSolid(
               scene,
@@ -495,7 +525,7 @@ export default function ModelViewer({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label, plateFacing, outline, insideOutline, plinthTopY]);
+  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label, plateFacing, outline, insideOutline, plinthTopY, layers]);
 
   // --- 2b. Runs + lifts draped on the terrain ---
   // Separate from the terrain rebuild so toggling lifts or changing the
@@ -526,6 +556,7 @@ export default function ModelViewer({
       minWidthMm: minRunWidthMm,
       lift: RIBBON_LIFT_IN,
       insideOutline,
+      layerLevels: layers?.levels,
     });
 
     ribbonsRef.current = groups.map((g) => {
@@ -552,6 +583,7 @@ export default function ModelViewer({
     verticalExaggeration,
     plinthTopY,
     insideOutline,
+    layers,
     resort,
     showRuns,
     colorScheme,
@@ -603,8 +635,8 @@ export default function ModelViewer({
         solid.delete();
       }
     }
-    // Without the solids an outline model would export as its uncut block.
-    if (outlineInputs) return null;
+    // Without the solids this would export the uncut, unstacked block.
+    if (outlineInputs || layers) return null;
     const positions = terrain.getVerticesData(VertexBuffer.PositionKind);
     const indices = terrain.getIndices();
     if (!positions || !indices) return null;
@@ -612,7 +644,7 @@ export default function ModelViewer({
     const lifted = Float32Array.from(positions);
     for (let i = 1; i < lifted.length; i += 3) lifted[i] += terrain.position.y;
     return { positions: lifted, indices };
-  }, [outlineInputs]);
+  }, [outlineInputs, layers]);
 
   const exportSTL = useCallback(() => {
     const scene = sceneRef.current;
@@ -676,15 +708,17 @@ export default function ModelViewer({
           onChange={(e) => setSunAzimuth(parseInt(e.target.value, 10))}
           className="accent-amber-400"
         />
-        <label className="flex items-center gap-2 mt-1">
-          <input
-            type="checkbox"
-            checked={showContours}
-            onChange={(e) => setShowContours(e.target.checked)}
-            className="accent-amber-400"
-          />
-          <span className="text-slate-300">Contour lines</span>
-        </label>
+        {layerCount === 0 && (
+          <label className="flex items-center gap-2 mt-1">
+            <input
+              type="checkbox"
+              checked={showContours}
+              onChange={(e) => setShowContours(e.target.checked)}
+              className="accent-amber-400"
+            />
+            <span className="text-slate-300">Contour lines</span>
+          </label>
+        )}
         <button
           type="button"
           onClick={exportSTL}

@@ -17,6 +17,7 @@ import {
   type PlateSide,
 } from "./nameplate";
 import { buildPlinthSolid, plinthHeightInches } from "./plinth";
+import { stackTerrain, type TerrainLayers } from "./layers";
 import { buildOutlinePlinth, OUTLINE_PLINTH_HEIGHT_IN, outlinePrism } from "./silhouette";
 import { buildTextSolid, fontSizeForCapHeight, measureTextWidth, type Contour } from "./text";
 
@@ -35,6 +36,8 @@ export interface ModelSpec extends PlateSide {
   brand: boolean;
   /** Cut the model to this ring instead of the frame. Model plane, inches. */
   outline?: Contour | null;
+  /** Rebuild the terrain as flat steps. */
+  layers?: TerrainLayers | null;
 }
 
 export interface BuiltModel {
@@ -88,6 +91,12 @@ export function buildModelSolids(
       release(cutter);
       release(terrain);
       terrain = cut;
+    }
+
+    if (spec.layers) {
+      const stacked = own(stackTerrain(m, terrain, spec.layers));
+      release(terrain);
+      terrain = stacked;
     }
 
     let brandSpin = spec.rotation + plateTurnDeg(spec);

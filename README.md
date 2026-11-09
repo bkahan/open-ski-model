@@ -207,6 +207,7 @@ are fused in by position dedup so the export stays a single solid.
 | `t`     | base thickness, inches                                 |
 | `rh`    | model height, base to peak, in inches                  |
 | `ol`    | `1` to cut the model to the resort's outline           |
+| `ln`    | stacked finish: number of steps (omitted when smooth)  |
 | `runs`  | `0` to hide ski runs (on by default)                   |
 | `lf`    | `0` to hide lifts (on by default)                      |
 | `mw`    | minimum run width in mm (omitted at the default 1.2)   |
@@ -266,6 +267,7 @@ lib/mesh/
     nameplate.ts           Glyph placement on the chamfer, font fitting
     compass.ts             Compass rose outlines
     silhouette.ts          Resort outline, slab and name tab
+    layers.ts              Stacked finish: flat elevation steps
     text.ts                Font loading, glyph outlines, text solids
     watertight.ts          Build closed VertexData from height grid
     runs.ts                Drape runs + lifts as ribbons, one per color
