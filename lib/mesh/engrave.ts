@@ -17,12 +17,15 @@ import {
   type PlateSide,
 } from "./nameplate";
 import { buildPlinthSolid, plinthHeightInches } from "./plinth";
-import { buildTextSolid, fontSizeForCapHeight, measureTextWidth } from "./text";
+import { buildOutlinePlinth, OUTLINE_PLINTH_HEIGHT_IN, outlinePrism } from "./silhouette";
+import { buildTextSolid, fontSizeForCapHeight, measureTextWidth, type Contour } from "./text";
 
 const MM_PER_INCH = 25.4;
 export const BRAND_TEXT = "craftedcarving.com";
 const BRAND_CAP_IN = 3 / MM_PER_INCH;
 const BRAND_OVERCUT_IN = 0.01;
+/** Taller than any terrain, so the outline cuts all the way through. */
+const OUTLINE_CUTTER_HEIGHT_IN = 100;
 
 export interface ModelSpec extends PlateSide {
   label: string;
@@ -30,6 +33,8 @@ export interface ModelSpec extends PlateSide {
   plinth: boolean;
   /** Brand text on the underside. */
   brand: boolean;
+  /** Cut the model to this ring instead of the frame. Model plane, inches. */
+  outline?: Contour | null;
 }
 
 export interface BuiltModel {
@@ -37,7 +42,7 @@ export interface BuiltModel {
   terrain: Manifold;
   /** Plinth with pockets, or null. The terrain sits on top at `plinthHeight`. */
   plinth: Manifold | null;
-  /** Name-plate fill bodies (one per glyph + arrow), for multicolor printing. */
+  /** Name-plate fill bodies (one per glyph + the rose), for multicolor printing. */
   inlays: Manifold[];
   plinthHeight: number;
   nameplate: NameplateLayout | null;
@@ -70,11 +75,42 @@ export function buildModelSolids(
     let plinth: Manifold | null = null;
     let inlays: Manifold[] = [];
     let nameplate: NameplateLayout | null = null;
-    const plinthHeight = spec.plinth ? plinthHeightInches() : 0;
+    const outline = spec.outline ?? null;
+    const plinthHeight = !spec.plinth
+      ? 0
+      : outline
+        ? OUTLINE_PLINTH_HEIGHT_IN
+        : plinthHeightInches();
+
+    if (outline) {
+      const cutter = own(outlinePrism(m, outline, OUTLINE_CUTTER_HEIGHT_IN));
+      const cut = own(m.Manifold.intersection(terrain, cutter));
+      release(cutter);
+      release(terrain);
+      terrain = cut;
+    }
+
+    let brandSpin = spec.rotation + plateTurnDeg(spec);
+    let brandAt: [number, number] = [0, 0];
 
     if (spec.plinth) {
-      const raw = own(buildPlinthSolid(m, spec));
-      const plate = buildNameplateSolids(m, font, { ...spec, compass: true });
+      let raw: Manifold;
+      let plate: { solids: Manifold[]; layout: NameplateLayout | null };
+      if (outline) {
+        const built = buildOutlinePlinth(m, font, {
+          outline,
+          label: spec.label,
+          compass: true,
+          facing: spec.facing,
+        });
+        raw = own(built.slab);
+        plate = built;
+        brandSpin = built.spin;
+        brandAt = built.tabCenter;
+      } else {
+        raw = own(buildPlinthSolid(m, spec));
+        plate = buildNameplateSolids(m, font, { ...spec, compass: true });
+      }
       for (const s of plate.solids) own(s);
       nameplate = plate.layout;
       if (plate.solids.length > 0) {
@@ -92,7 +128,7 @@ export function buildModelSolids(
       const host = plinth ?? terrain;
       // Same side as the plate, so it reads when the model is tipped
       // over its front edge.
-      const branded = cutBrand(m, font, host, spec.rotation + plateTurnDeg(spec));
+      const branded = cutBrand(m, font, host, brandSpin, brandAt);
       if (branded) {
         own(branded);
         release(host);
@@ -111,14 +147,16 @@ export function buildModelSolids(
 /**
  * Cut the brand into the underside of `host` (bottom face on y = 0),
  * mirrored so it reads when the model is turned over its south edge,
- * then spun about y by `spin` (shapeOutline's degrees). Returns null if
- * the cut fails; the host is left untouched either way.
+ * centered at `at` (x, z before the spin), then spun about y by `spin`
+ * (shapeOutline's degrees). Returns null if the cut fails; the host is
+ * left untouched either way.
  */
 export function cutBrand(
   m: ManifoldToplevel,
   font: opentype.Font,
   host: Manifold,
   spin: number,
+  at: [number, number] = [0, 0],
 ): Manifold | null {
   const size = fontSizeForCapHeight(font, BRAND_CAP_IN);
   const text = buildTextSolid(m, font, BRAND_TEXT, size, POCKET_DEPTH_IN + BRAND_OVERCUT_IN);
@@ -130,9 +168,10 @@ export function cutBrand(
   // the body (y from -overcut to +depth), then spin it into place.
   const centered = text.translate([-width / 2, -BRAND_CAP_IN / 2, -BRAND_OVERCUT_IN]);
   const flat = centered.rotate([-90, 0, 0]);
-  const placed = flat.rotate([0, -spin, 0]);
+  const moved = flat.translate([at[0], 0, at[1]]);
+  const placed = moved.rotate([0, -spin, 0]);
   const cut = m.Manifold.difference(host, placed);
-  return withSolids([text, centered, flat, placed], () => {
+  return withSolids([text, centered, flat, moved, placed], () => {
     if (cut.status() !== "NoError" || cut.numTri() === 0) {
       cut.delete();
       return null;

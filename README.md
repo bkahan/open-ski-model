@@ -37,11 +37,11 @@ box, get a watertight `.stl` you can hand to your slicer.
   T-junctions, so the solid is manifold. All booleans run in
   [Manifold](https://github.com/elalish/manifold) (WASM), which handles a
   130k-triangle terrain in well under a second: the brand on the
-  underside, the name plate and north arrow in the plinth's chamfer, and
+  underside, the name plate and compass rose in the plinth's chamfer, and
   the terrain + plinth union used for export.
 
 - **Chamfered plinth with name plate.** A 15 mm rim at 35° all round. The
-  place name and a north arrow are cut glyph by glyph into the chamfer
+  place name and a compass rose are cut glyph by glyph into the chamfer
   on the resort's base side (the mean downhill direction of its runs
   and lifts; the frame's bottom edge when there is no resort), so on a
   circular plinth they follow the cone. Cap height comes
@@ -50,7 +50,7 @@ box, get a watertight `.stl` you can hand to your slicer.
   inlays for multicolor printing.
 - **Optional plinth + engravings.**
   - *Label + compass:* a beveled plinth wraps the model and the place
-    name + a north-pointing arrow are inlaid into the rim on the base
+    name + an N/E/S/W compass rose are inlaid into the rim on the base
     side, tilted 35° so they face up on a desk.
   - *Brand on bottom:* `craftedcarving.com` engraved into the bottom
     face. Independent toggle.
@@ -91,7 +91,7 @@ box, get a watertight `.stl` you can hand to your slicer.
   `docs/roadmap.md`.
 
 - **Share-by-URL.** Every change to the bbox / shape / rotation / size /
-  density / engraving toggles / exaggeration / run settings is mirrored
+  density / engraving toggles / model height / run settings is mirrored
   to the URL, so a deep link reopens the same model.
 - **Installable PWA.** Manifest + service worker (Serwist). App shell and
   static assets cache; map tiles cached opportunistically.
@@ -173,8 +173,9 @@ against extruded glyph outlines (`lib/mesh/manifold.ts`,
 
 Scene units are inches. Vertical scale is
 `elevation_m × (print_width_in / bbox_width_m) × verticalExaggeration`,
-so a 1× exaggeration is true-scale, and the default 2× makes a 6" print
-feel like terrain.
+so a 1× exaggeration is true-scale. The exaggeration comes from the
+model height setting (1.25" by default): each resort's relief is scaled
+to that height on the print, within 0.5–8×.
 
 For STL export we clone the mesh, scale by 25.4 (mm/in), and let the
 serializer bake the transform into vertex positions. The downloaded file
@@ -204,7 +205,8 @@ are fused in by position dedup so the export stays a single solid.
 | `el`    | `1` to engrave the plinth label + compass              |
 | `eb`    | `0` to disable the bottom brand engraving (on by default) |
 | `t`     | base thickness, inches                                 |
-| `v`     | vertical exaggeration                                  |
+| `rh`    | model height, base to peak, in inches                  |
+| `ol`    | `1` to cut the model to the resort's outline           |
 | `runs`  | `0` to hide ski runs (on by default)                   |
 | `lf`    | `0` to hide lifts (on by default)                      |
 | `mw`    | minimum run width in mm (omitted at the default 1.2)   |
@@ -235,7 +237,7 @@ components/
   ModelViewer.tsx          Babylon scene + toolbar (sun, contours, STL)
   SearchBar.tsx            Nominatim geocoding
   ShapeControls.tsx        Rectangle / circle / hexagon selector
-  SizeControls.tsx         Print-size + exaggeration inputs
+  SizeControls.tsx         Print-size + model-height inputs
   DensityControls.tsx      Mesh-density preset + custom slider
   EngravingControls.tsx    Label/compass + brand toggles
   ResortControls.tsx       Runs / lifts / min width / color scheme
@@ -262,7 +264,8 @@ lib/mesh/
     engrave.ts             Plinth + name plate + brand + export union
     plinth.ts              Chamfered plinth solid (hull of offset outlines)
     nameplate.ts           Glyph placement on the chamfer, font fitting
-    compass.ts             North-arrow outline
+    compass.ts             Compass rose outlines
+    silhouette.ts          Resort outline, slab and name tab
     text.ts                Font loading, glyph outlines, text solids
     watertight.ts          Build closed VertexData from height grid
     runs.ts                Drape runs + lifts as ribbons, one per color

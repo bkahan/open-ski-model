@@ -5,11 +5,12 @@ import { decodeUrlState, encodeUrlState, type UrlState } from "./url-state";
 const base: UrlState = {
   bbox: [-72.52, 44.91, -72.48, 44.95],
   shape: "rectangle",
+  silhouette: false,
   rotation: 0,
   widthInches: 6,
   heightInches: 6,
   baseThicknessInches: 0.25,
-  verticalExaggeration: 2,
+  reliefInches: 1.25,
   aspectLocked: true,
   gridSize: 256,
   engraveLabel: false,
@@ -20,6 +21,24 @@ const base: UrlState = {
   colorScheme: "auto",
   label: "Jay Peak",
 };
+
+describe("model height url state", () => {
+  it("round-trips the model height", () => {
+    const params = encodeUrlState({ ...base, reliefInches: 1.75 });
+    expect(params.get("rh")).toBe("1.75");
+    expect(decodeUrlState(params).reliefInches).toBe(1.75);
+  });
+
+  it("round-trips the resort outline", () => {
+    expect(encodeUrlState(base).has("ol")).toBe(false);
+    expect(decodeUrlState(encodeUrlState({ ...base, silhouette: true })).silhouette).toBe(true);
+  });
+
+  it("rejects a height that is not positive", () => {
+    expect(decodeUrlState(new URLSearchParams("rh=0")).reliefInches).toBeUndefined();
+    expect(decodeUrlState(new URLSearchParams("rh=abc")).reliefInches).toBeUndefined();
+  });
+});
 
 describe("resort url state", () => {
   it("omits resort params at their defaults", () => {

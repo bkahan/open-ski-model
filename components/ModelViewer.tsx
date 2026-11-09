@@ -37,8 +37,14 @@ import { buildContourLines } from "@/lib/mesh/contours";
 import { buildModelSolids, unionForExport, type BuiltModel } from "@/lib/mesh/engrave";
 import { loadManifold, vertexDataFromManifold, type ColorAt } from "@/lib/mesh/manifold";
 import { plateFacingDeg } from "@/lib/mesh/nameplate";
+import {
+  buildResortOutline,
+  OUTLINE_PLINTH_HEIGHT_IN,
+  outlineMask,
+} from "@/lib/mesh/silhouette";
+import type { Contour } from "@/lib/mesh/text";
 import { plinthHeightInches } from "@/lib/mesh/plinth";
-import { buildRunRibbons, resortFrontBearing } from "@/lib/mesh/runs";
+import { buildRunRibbons, resortFrontBearing, resortLinesOnPlane } from "@/lib/mesh/runs";
 import { exportToStep } from "@/lib/mesh/step-export";
 import { loadFont } from "@/lib/mesh/text";
 import type { ElevationResponse } from "@/lib/elevation/types";
@@ -47,6 +53,7 @@ import type { ResortData } from "@/lib/resort/types";
 import {
   pointInShape,
   shapeAABBHalf,
+  shapeOutline,
   type Shape,
 } from "@/lib/shape";
 import type { Bbox } from "@/lib/types";
@@ -67,6 +74,8 @@ interface Props {
   label?: string;
   /** The resort in frame, if any; it also decides which way the name plate faces. */
   resort: ResortData | null;
+  /** Cut the model to the resort's outline when there is one. */
+  silhouette: boolean;
   /** Drape the runs (and, with showLifts, the lifts) on the terrain. */
   showRuns: boolean;
   colorScheme: ColorScheme;
@@ -132,6 +141,7 @@ export default function ModelViewer({
   engraveBrand,
   label,
   resort,
+  silhouette,
   showRuns,
   colorScheme,
   showLifts,
@@ -154,6 +164,52 @@ export default function ModelViewer({
 
   const [sunAzimuth, setSunAzimuth] = useState(135); // degrees
   const [showContours, setShowContours] = useState(true);
+  // A trace only counts for the exact inputs it was made from, so a model
+  // can never be cut to the previous resort's ring while the next is traced.
+  const outlineInputs = useMemo(
+    () =>
+      silhouette && resort && shape === "rectangle"
+        ? { bbox, data, shape, widthInches, heightInches, rotation, resort }
+        : null,
+    [silhouette, resort, bbox, data, shape, widthInches, heightInches, rotation],
+  );
+  const [traced, setTraced] = useState<{
+    inputs: NonNullable<typeof outlineInputs>;
+    ring: Contour | null;
+  } | null>(null);
+  const outline = traced && traced.inputs === outlineInputs ? traced.ring : null;
+
+  useEffect(() => {
+    if (!outlineInputs) return;
+    let cancelled = false;
+    loadManifold()
+      .then((m) => {
+        if (cancelled) return;
+        const [halfW] = shapeAABBHalf(
+          outlineInputs.shape,
+          outlineInputs.widthInches,
+          outlineInputs.heightInches,
+          outlineInputs.rotation,
+        );
+        const cell = (halfW * 2) / (outlineInputs.data.width - 1);
+        const ring = buildResortOutline(
+          m,
+          resortLinesOnPlane(outlineInputs),
+          shapeOutline(
+            outlineInputs.shape,
+            outlineInputs.widthInches - 2 * cell,
+            outlineInputs.heightInches - 2 * cell,
+            outlineInputs.rotation,
+          ),
+          Math.max(outlineInputs.widthInches, outlineInputs.heightInches),
+        );
+        setTraced({ inputs: outlineInputs, ring });
+      })
+      .catch((err: unknown) => console.error("[silhouette] failed", err));
+    return () => {
+      cancelled = true;
+    };
+  }, [outlineInputs]);
 
   // The name plate (and the brand with it) goes on the resort's base
   // side; without resort data, or a clear base side, it stays on the
@@ -163,8 +219,17 @@ export default function ModelViewer({
     if (!resort || !(engraveLabel || engraveBrand)) return undefined;
     const side = { shape, widthInches, heightInches, rotation };
     const front = resortFrontBearing({ bbox, data, ...side, resort });
-    return front === null ? undefined : plateFacingDeg({ ...side, facing: front });
-  }, [bbox, data, shape, widthInches, heightInches, rotation, resort, engraveLabel, engraveBrand]);
+    if (front === null) return undefined;
+    return outline ? Math.round(front) : plateFacingDeg({ ...side, facing: front });
+  }, [bbox, data, shape, widthInches, heightInches, rotation, resort, engraveLabel, engraveBrand, outline]);
+
+  const plinthTopY = !engraveLabel ? 0 : outline ? OUTLINE_PLINTH_HEIGHT_IN : plinthHeightInches();
+
+  const insideOutline = useMemo(() => {
+    if (!outline) return undefined;
+    const [halfW, halfH] = shapeAABBHalf(shape, widthInches, heightInches, rotation);
+    return outlineMask(outline, halfW * 2, halfH * 2, data.width, data.height);
+  }, [outline, shape, widthInches, heightInches, rotation, data.width, data.height]);
 
   // --- 1. Bootstrap engine + scene once ---
   useEffect(() => {
@@ -306,7 +371,6 @@ export default function ModelViewer({
 
     // With a plinth the terrain sits on top of it, so everything drawn in
     // terrain coordinates shifts up by the plinth height.
-    const plinthTopY = engraveLabel ? plinthHeightInches() : 0;
     terrain.position.y = plinthTopY;
     terrain.computeWorldMatrix(true);
 
@@ -326,12 +390,15 @@ export default function ModelViewer({
     const Hgrid = aabbHalf[1] * 2;
     const xAt = (i: number) => -Wgrid / 2 + (i * Wgrid) / (gw - 1);
     const zAt = (j: number) => Hgrid / 2 - (j * Hgrid) / (gh - 1);
-    const cellKept = needsMask
+    const keptAt = (x: number, z: number) =>
+      (!needsMask || pointInShape(shape, x, z, widthInches, heightInches, rotation)) &&
+      (insideOutline?.(x, z) ?? true);
+    const cellKept = needsMask || insideOutline
       ? (i: number, j: number) =>
-          pointInShape(shape, xAt(i), zAt(j), widthInches, heightInches, rotation) &&
-          pointInShape(shape, xAt(i + 1), zAt(j), widthInches, heightInches, rotation) &&
-          pointInShape(shape, xAt(i), zAt(j + 1), widthInches, heightInches, rotation) &&
-          pointInShape(shape, xAt(i + 1), zAt(j + 1), widthInches, heightInches, rotation)
+          keptAt(xAt(i), zAt(j)) &&
+          keptAt(xAt(i + 1), zAt(j)) &&
+          keptAt(xAt(i), zAt(j + 1)) &&
+          keptAt(xAt(i + 1), zAt(j + 1))
       : undefined;
     const contourData = buildContourLines({
       data,
@@ -372,7 +439,7 @@ export default function ModelViewer({
     // Font and WASM load once; after that the whole pass takes well
     // under a second even at high density. Results replace the plain
     // meshes above unless the inputs changed meanwhile.
-    if (engraveLabel || engraveBrand) {
+    if (engraveLabel || engraveBrand || outline) {
       const positions = vertexData.positions;
       const indices = vertexData.indices;
       (async () => {
@@ -388,6 +455,7 @@ export default function ModelViewer({
             label: label ?? "",
             plinth: engraveLabel,
             brand: engraveBrand,
+            outline,
           });
           if (cancelled) {
             freeBuilt(built);
@@ -395,7 +463,7 @@ export default function ModelViewer({
           }
           builtRef.current = built;
 
-          if (engraveBrand && !built.plinth) {
+          if ((engraveBrand && !built.plinth) || outline) {
             const topY = terrain.getBoundingInfo().boundingBox.maximum.y;
             const branded = meshFromSolid(
               scene,
@@ -427,7 +495,7 @@ export default function ModelViewer({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label, plateFacing]);
+  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label, plateFacing, outline, insideOutline, plinthTopY]);
 
   // --- 2b. Runs + lifts draped on the terrain ---
   // Separate from the terrain rebuild so toggling lifts or changing the
@@ -457,9 +525,9 @@ export default function ModelViewer({
       showLifts,
       minWidthMm: minRunWidthMm,
       lift: RIBBON_LIFT_IN,
+      insideOutline,
     });
 
-    const yOffset = engraveLabel ? plinthHeightInches() : 0;
     ribbonsRef.current = groups.map((g) => {
       const mat = new StandardMaterial(`run-${g.name}`, scene);
       mat.diffuseColor = new Color3(...g.rgb);
@@ -469,7 +537,7 @@ export default function ModelViewer({
       const mesh = new Mesh(`runs-${g.name}`, scene);
       g.vertexData.applyToMesh(mesh, false);
       mesh.material = mat;
-      mesh.position.y = yOffset;
+      mesh.position.y = plinthTopY;
       mesh.isPickable = false;
       return mesh;
     });
@@ -482,7 +550,8 @@ export default function ModelViewer({
     rotation,
     baseThicknessInches,
     verticalExaggeration,
-    engraveLabel,
+    plinthTopY,
+    insideOutline,
     resort,
     showRuns,
     colorScheme,
@@ -534,6 +603,8 @@ export default function ModelViewer({
         solid.delete();
       }
     }
+    // Without the solids an outline model would export as its uncut block.
+    if (outlineInputs) return null;
     const positions = terrain.getVerticesData(VertexBuffer.PositionKind);
     const indices = terrain.getIndices();
     if (!positions || !indices) return null;
@@ -541,7 +612,7 @@ export default function ModelViewer({
     const lifted = Float32Array.from(positions);
     for (let i = 1; i < lifted.length; i += 3) lifted[i] += terrain.position.y;
     return { positions: lifted, indices };
-  }, []);
+  }, [outlineInputs]);
 
   const exportSTL = useCallback(() => {
     const scene = sceneRef.current;

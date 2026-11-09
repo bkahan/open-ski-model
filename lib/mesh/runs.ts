@@ -44,6 +44,8 @@ export interface RunMeshSpec {
   minWidthMm: number;
   /** How far above the terrain surface the ribbon floats, in inches. */
   lift: number;
+  /** Extra footprint test, for a model cut to something other than its shape. */
+  insideOutline?: (x: number, z: number) => boolean;
 }
 
 export interface RibbonGroup {
@@ -111,6 +113,14 @@ export function resortFrontBearing(spec: PlaneSpec & { resort: ResortData }): nu
   });
 }
 
+/** Every run and lift as a polyline in the model plane, for tracing an outline. */
+export function resortLinesOnPlane(
+  spec: PlaneSpec & { resort: ResortData },
+): Array<Array<[number, number]>> {
+  const { geoToLocal } = modelPlane(spec);
+  return [...spec.resort.runs, ...spec.resort.lifts].map((line) => line.coords.map(geoToLocal));
+}
+
 export function buildRunRibbons(spec: RunMeshSpec): RibbonGroup[] {
   const {
     data,
@@ -125,12 +135,14 @@ export function buildRunRibbons(spec: RunMeshSpec): RibbonGroup[] {
     showLifts,
     minWidthMm,
     lift,
+    insideOutline,
   } = spec;
 
   const { geoToLocal, gridW, gridH, inPerMeter } = modelPlane(spec);
   const sampler = heightSampler(data, gridW, gridH, baseThicknessInches, inPerMeter * verticalExaggeration);
   const inside = (x: number, z: number) =>
-    pointInShape(shape, x, z, widthInches, heightInches, rotation);
+    pointInShape(shape, x, z, widthInches, heightInches, rotation) &&
+    (insideOutline?.(x, z) ?? true);
 
   const cellIn = gridW / (data.width - 1);
   const minWidthIn = minWidthMm / MM_PER_INCH;

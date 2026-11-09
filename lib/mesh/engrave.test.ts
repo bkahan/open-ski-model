@@ -9,9 +9,16 @@ import type { ElevationResponse } from "@/lib/elevation/types";
 import type { Shape } from "@/lib/shape";
 import type { Bbox } from "@/lib/types";
 
+import { compassRoseContours } from "./compass";
 import { buildModelSolids, cutBrand, unionForExport } from "./engrave";
-import { withSolids } from "./manifold";
-import { buildNameplateSolids, fitNameplate, plateFacingDeg, plateTurnDeg } from "./nameplate";
+import { extrudeContours, withSolids } from "./manifold";
+import {
+  buildNameplateSolids,
+  fitNameplate,
+  plateFacingDeg,
+  plateTurnDeg,
+  roseDiameterInches,
+} from "./nameplate";
 import { buildPlinthSolid, plinthHeightInches, RIM_IN } from "./plinth";
 import { buildShapedWatertight, buildWatertight } from "./watertight";
 
@@ -83,6 +90,52 @@ describe("fitNameplate", () => {
     expect(layout.text.length).toBeLessThan("Dolomiti Superski Alta Badia".length);
   });
 
+  it("never cuts off a name that fits, whatever the model size", () => {
+    // Regression: rounding after the shrink rejected exact fits, turning
+    // "Resort" into "Reso…" on about a quarter of sizes.
+    for (let w = 3; w < 4.5; w += 0.00137) {
+      const layout = fitNameplate(font, {
+        shape: "circle",
+        widthInches: w,
+        heightInches: w,
+        rotation: 0,
+        label: "Loon Mountain Resort",
+        compass: true,
+      })!;
+      expect(layout.text).toBe("Loon Mountain Resort");
+    }
+  });
+
+  it("drops generic words before cutting letters", () => {
+    const tiny = { shape: "circle" as Shape, widthInches: 2, heightInches: 2, rotation: 0, compass: true };
+    expect(fitNameplate(font, { ...tiny, label: "Loon Mountain Resort" })!.text).toBe("Loon Mountain");
+    expect(fitNameplate(font, { ...tiny, label: "Bretton Woods Ski Area" })!.text).toBe("Bretton Woods");
+  });
+
+  it("uses the part before a comma when the whole name won't fit", () => {
+    const layout = fitNameplate(font, {
+      shape: "circle",
+      widthInches: 3,
+      heightInches: 3,
+      rotation: 0,
+      label: "Mont Tremblant Resort, Station Mont Tremblant",
+      compass: true,
+    })!;
+    expect(layout.text).toBe("Mont Tremblant Resort");
+  });
+
+  it("leaves the rose off a face too short for it", () => {
+    const layout = fitNameplate(font, {
+      shape: "rectangle",
+      widthInches: 0.5,
+      heightInches: 0.5,
+      rotation: 0,
+      label: "",
+      compass: true,
+    });
+    expect(layout).toBeNull();
+  });
+
   it("returns null with nothing to show", () => {
     expect(fitNameplate(font, { shape: "rectangle", ...base, label: "  ", compass: false })).toBeNull();
   });
@@ -127,8 +180,36 @@ describe("plateTurnDeg", () => {
   });
 });
 
+describe("compassRoseContours", () => {
+  const diameter = 16 / 25.4;
+
+  it.each([0, 37, 90, 133, -200])("stays inside its circle turned %d°", (turn) => {
+    const contours = compassRoseContours(m, font, diameter, turn);
+    // Four letters (none has a counter) and the star.
+    expect(contours).toHaveLength(5);
+    for (const [x, y] of contours.flat()) {
+      expect(Math.hypot(x, y)).toBeLessThanOrEqual(diameter / 2 + 1e-6);
+    }
+  });
+
+  it("keeps the letters clear of the star", () => {
+    for (const turn of [0, 22, 45, 67, 90]) {
+      const contours = compassRoseContours(m, font, diameter, turn);
+      const star = contours.at(-1)!;
+      const letters = m.CrossSection.compose(
+        contours.slice(0, -1).map((c) => new m.CrossSection([c], "NonZero")),
+      );
+      const starSection = new m.CrossSection([star], "NonZero");
+      const overlap = m.CrossSection.intersection(letters, starSection);
+      expect(overlap.area()).toBe(0);
+      expect(starSection.area()).toBeGreaterThan(0);
+      for (const s of [letters, starSection, overlap]) s.delete();
+    }
+  });
+});
+
 describe("buildNameplateSolids", () => {
-  it("places every glyph and the arrow on the frame's bottom edge by default", () => {
+  it("places every glyph and the rose on the frame's bottom edge by default", () => {
     const { solids, layout } = buildNameplateSolids(m, font, {
       shape: "rectangle",
       ...base,
@@ -174,7 +255,7 @@ describe("buildNameplateSolids", () => {
     });
   });
 
-  it("keeps the arrow on true north wherever the plate sits", () => {
+  it("keeps the rose on true north wherever the plate sits", () => {
     const { solids } = buildNameplateSolids(m, font, {
       shape: "rectangle",
       ...base,
@@ -182,14 +263,35 @@ describe("buildNameplateSolids", () => {
       label: "",
       compass: true,
     });
-    withSolids(solids, () => {
+    const diameter = roseDiameterInches();
+    const cut = 0.45 * (diameter / 2);
+    // On the east face north runs along the face toward +z, so a slice
+    // past the star on that side holds the N and the other holds the S.
+    // In the rose's own frame that face turns it 90° clockwise, north to +x.
+    const flat = extrudeContours(m, compassRoseContours(m, font, diameter, -90), 1);
+    const flatNorth = flat.trimByPlane([1, 0, 0], cut);
+    const flatSouth = flat.trimByPlane([-1, 0, 0], cut);
+    const placedNorth = solids[0].trimByPlane([0, 0, 1], cut);
+    const placedSouth = solids[0].trimByPlane([0, 0, -1], cut);
+    withSolids([...solids, flat, flatNorth, flatSouth, placedNorth, placedSouth], () => {
       expect(solids).toHaveLength(1);
-      // On the east face the arrow lies along z. Its tip reaches r
-      // past center and the stem 0.85 r the other way, so the longer
-      // reach must be north.
-      const box = solids[0].boundingBox();
-      expect(box.max[2]).toBeGreaterThan(0);
-      expect(box.max[2] / -box.min[2]).toBeCloseTo(1 / 0.85, 1);
+      const expected = flatNorth.volume() / flatSouth.volume();
+      expect(Math.abs(expected - 1)).toBeGreaterThan(0.02);
+      expect(placedNorth.volume() / placedSouth.volume()).toBeCloseTo(expected, 2);
+    });
+  });
+
+  it("gives a hexagon's rose the next face and the name its own", () => {
+    const hex = { shape: "hexagon" as Shape, widthInches: 3, heightInches: 3 * 0.866, rotation: 0, compass: true };
+    const label = "Stowe Mountain";
+    expect(fitNameplate(font, { ...hex, label })!.text).toBe(label);
+    const { solids } = buildNameplateSolids(m, font, { ...hex, label });
+    withSolids(solids, () => {
+      const box = solids.at(-1)!.boundingBox();
+      const bearing = (Math.atan2(box.min[0] + box.max[0], box.min[2] + box.max[2]) * 180) / Math.PI;
+      expect(bearing).toBeCloseTo(120, -1);
+      const nameBox = solids[0].boundingBox();
+      expect(nameBox.min[2]).toBeLessThan(-(1.5 * 0.866));
     });
   });
 
@@ -225,7 +327,7 @@ describe("buildModelSolids", () => {
     const union = unionForExport(m, built);
     withSolids([built.terrain, built.plinth!, ...built.inlays, union], () => {
       expect(built.plinth!.status()).toBe("NoError");
-      // One per visible glyph (the space has no outline) plus the arrow.
+      // One per visible glyph (the space has no outline) plus the rose.
       expect(built.inlays.length).toBe(built.nameplate!.text.replace(/\s/g, "").length + 1);
       for (const inlay of built.inlays) expect(inlay.volume()).toBeGreaterThan(0);
       // Pockets and brand both remove material from the plinth.

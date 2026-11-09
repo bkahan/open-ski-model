@@ -52,6 +52,13 @@ import {
   shapeIsRotatable,
   type Shape,
 } from "@/lib/shape";
+import {
+  DEFAULT_RELIEF_INCHES,
+  exaggerationForRelief,
+  fitDragToPrint,
+  reliefForResizedPrint,
+  scaleForResizedPrint,
+} from "@/lib/print-fit";
 import type { Bbox, LngLat, SearchResult } from "@/lib/types";
 import { decodeUrlState, syncUrl } from "@/lib/url-state";
 
@@ -163,10 +170,11 @@ export default function Home() {
     widthInches: 6,
     heightInches: 6,
     baseThicknessInches: 0.25,
-    verticalExaggeration: 2,
+    reliefInches: DEFAULT_RELIEF_INCHES,
     aspectLocked: true,
   });
   const [shape, setShape] = useState<Shape>("rectangle");
+  const [silhouette, setSilhouette] = useState(false);
   const [rotation, setRotation] = useState(0);
   const [gridSize, setGridSize] = useState<number>(DEFAULT_GRID_SIZE);
   const [engraveLabel, setEngraveLabel] = useState<boolean>(false);
@@ -203,12 +211,13 @@ export default function Home() {
     else if (locked) h = w;
 
     setShape(sh);
+    setSilhouette(sh === "rectangle" && (parsed.silhouette ?? false));
     setRotation(rot);
     setSize({
       widthInches: w,
       heightInches: h,
       baseThicknessInches: parsed.baseThicknessInches ?? 0.25,
-      verticalExaggeration: parsed.verticalExaggeration ?? 2,
+      reliefInches: parsed.reliefInches ?? DEFAULT_RELIEF_INCHES,
       aspectLocked: locked,
     });
     const nextGridSize = parsed.gridSize !== undefined
@@ -244,11 +253,12 @@ export default function Home() {
       syncUrl({
         bbox,
         shape,
+        silhouette,
         rotation,
         widthInches: size.widthInches,
         heightInches: size.heightInches,
         baseThicknessInches: size.baseThicknessInches,
-        verticalExaggeration: size.verticalExaggeration,
+        reliefInches: size.reliefInches,
         aspectLocked: size.aspectLocked,
         gridSize,
         engraveLabel,
@@ -258,7 +268,7 @@ export default function Home() {
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [bbox, shape, rotation, size, gridSize, engraveLabel, engraveBrand, resortSettings, label]);
+  }, [bbox, shape, silhouette, rotation, size, gridSize, engraveLabel, engraveBrand, resortSettings, label]);
 
   /** Fetch runs + lifts for `area`, replacing any in-flight request. */
   const loadResort = useCallback(async (area: Bbox): Promise<ResortData | null> => {
@@ -318,6 +328,24 @@ export default function Home() {
   // intentionally do NOT auto-refit in an effect — that would race with
   // the handlers and compute scale from stale references.
 
+  const exaggeration = useMemo(() => {
+    if (!snapshot) return null;
+    const metersPerInch = scaleMPerIn(
+      snapshot.bbox,
+      snapshot.shape,
+      snapshot.widthInches,
+      snapshot.heightInches,
+      snapshot.rotation,
+    );
+    // The panel's print size can run ahead of the model on screen until
+    // the next Regenerate, so the height is read at the model's own size.
+    return exaggerationForRelief(
+      reliefForResizedPrint(size, snapshot, size.reliefInches),
+      snapshot.data.max - snapshot.data.min,
+      1 / metersPerInch,
+    );
+  }, [snapshot, size]);
+
   // Memo "starting AABB aspect" so search snapping can use it.
   const aabbAspect = useMemo(() => {
     const [hW, hH] = shapeAABBHalf(
@@ -356,12 +384,19 @@ export default function Home() {
       // The index gives the resort's natural viewport: turn the frame to
       // its bearing (when the shape has one) and fit its padded bounds.
       // Bearings run clockwise from north; our rotation is positive CCW.
+      // Resorts default to their own outline with the name on it.
       const nextRotation =
-        shapeIsRotatable(shape) && result.bearing !== undefined
+        result.bearing !== undefined
           ? ((Math.round(-result.bearing) % 360) + 360) % 360
           : rotation;
+      const widthInches = size.widthInches;
+      const heightInches = shape === "rectangle" ? size.heightInches : widthInches;
+      setShape("rectangle");
+      setSilhouette(true);
+      setEngraveLabel(true);
+      setSize((s) => ({ ...s, heightInches }));
       setRotation(nextRotation);
-      const [hW, hH] = shapeAABBHalf(shape, size.widthInches, size.heightInches, nextRotation);
+      const [hW, hH] = shapeAABBHalf("rectangle", widthInches, heightInches, nextRotation);
       setBbox(snapBboxToAspect(scaleBbox(result.bbox, RESORT_FRAME_PADDING), hW / hH, 0));
       return;
     }
@@ -412,8 +447,15 @@ export default function Home() {
     );
   };
 
-  /** Corner / perimeter handle drag — sets new shape dimensions in inches. */
-  const handleShapeResize = (newWidthInches: number, newHeightInches: number) => {
+  /**
+   * Corner / perimeter handle drag. The drag decides what ground the frame
+   * covers; the print keeps its size and the map scale changes instead.
+   */
+  const handleShapeResize = (
+    newWidthInches: number,
+    newHeightInches: number,
+    newCenter?: LngLat,
+  ) => {
     if (!bbox) return;
     // Enforce aspect lock for rectangles. The lock is equivalent to a
     // projection of the un-constrained (W, H) drag onto the W = H line:
@@ -432,12 +474,22 @@ export default function Home() {
       size.heightInches,
       rotation,
     );
-    const center = bboxCenter(bbox);
-    setBbox(bboxForShape(center, shape, w, h, rotation, scale));
+    const fitted = fitDragToPrint({ widthInches: w, heightInches: h }, size, scale);
+    if (!fitted) return;
+    setBbox(
+      bboxForShape(
+        newCenter ?? bboxCenter(bbox),
+        shape,
+        fitted.widthInches,
+        fitted.heightInches,
+        rotation,
+        fitted.metersPerInch,
+      ),
+    );
     setSize((s) => ({
       ...s,
-      widthInches: w,
-      heightInches: h,
+      widthInches: fitted.widthInches,
+      heightInches: fitted.heightInches,
     }));
   };
 
@@ -467,6 +519,7 @@ export default function Home() {
   /** Shape change — adjust heightInches per new shape rules; refit bbox. */
   const handleShapeChange = (newShape: Shape) => {
     if (!bbox) return;
+    setSilhouette(false);
     const scale = scaleMPerIn(
       bbox,
       shape,
@@ -492,6 +545,11 @@ export default function Home() {
     setBbox(bboxForShape(center, newShape, newW, newH, newRot, scale));
   };
 
+  const handleSilhouette = () => {
+    if (shape !== "rectangle") handleShapeChange("rectangle");
+    setSilhouette(true);
+  };
+
   const handleSizeChange = (newSize: SizeState) => {
     if (!bbox) {
       setSize(newSize);
@@ -511,9 +569,16 @@ export default function Home() {
       size.heightInches,
       rotation,
     );
+    const next = { widthInches: w, heightInches: h };
     const center = bboxCenter(bbox);
-    setBbox(bboxForShape(center, shape, w, h, rotation, scale));
-    setSize({ ...newSize, widthInches: w, heightInches: h });
+    setBbox(
+      bboxForShape(center, shape, w, h, rotation, scaleForResizedPrint(size, next, scale)),
+    );
+    setSize({
+      ...newSize,
+      ...next,
+      reliefInches: reliefForResizedPrint(size, next, newSize.reliefInches),
+    });
   };
 
   const handleGenerate = async () => {
@@ -579,7 +644,12 @@ export default function Home() {
 
         <SearchBar onSelect={handleSearch} />
 
-        <ShapeControls shape={shape} onChange={handleShapeChange} />
+        <ShapeControls
+          shape={shape}
+          silhouette={silhouette}
+          onChange={handleShapeChange}
+          onSilhouette={handleSilhouette}
+        />
 
         <SizeControls
           size={size}
@@ -587,6 +657,7 @@ export default function Home() {
           rotation={rotation}
           onChange={handleSizeChange}
           bbox={bbox}
+          exaggeration={view === "viewer" ? exaggeration : null}
           onShapeWidthMetersChange={handleShapeWidthMetersChange}
         />
 
@@ -707,11 +778,12 @@ export default function Home() {
             widthInches={snapshot.widthInches}
             heightInches={snapshot.heightInches}
             baseThicknessInches={size.baseThicknessInches}
-            verticalExaggeration={size.verticalExaggeration}
+            verticalExaggeration={exaggeration ?? 1}
             engraveLabel={engraveLabel}
             engraveBrand={engraveBrand}
             label={snapshot.label}
             resort={resort}
+            silhouette={silhouette}
             showRuns={resortSettings.showRuns}
             colorScheme={resolvedScheme}
             showLifts={resortSettings.showLifts}
