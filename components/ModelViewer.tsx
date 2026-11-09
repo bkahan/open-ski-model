@@ -48,6 +48,7 @@ import {
   buildRunRibbons,
   resortFrontBearing,
   resortLinesOnPlane,
+  resortGroovePaths,
   terrainLayersFor,
 } from "@/lib/mesh/runs";
 import { exportToStep } from "@/lib/mesh/step-export";
@@ -137,6 +138,7 @@ function frameCameraOn(camera: ArcRotateCamera, built: BuiltModel, facingDeg: nu
 }
 
 const UNDERSIDE_COLOR: [number, number, number] = [0.78, 0.79, 0.82];
+const STEP_WALL_SHADE = 0.68;
 
 /**
  * Re-paint a Manifold-built terrain: surface by height, walls in the
@@ -149,6 +151,22 @@ function terrainColorAt(baseY: number, topY: number): ColorAt {
     if (ny > 0.3 && y > baseY - 1e-4) return DEFAULT_PALETTE.surface((y - baseY) / span);
     if (y < baseY * 0.5) return UNDERSIDE_COLOR;
     return DEFAULT_PALETTE.base;
+  };
+}
+
+/**
+ * Stacked terrain: step and groove walls take a darker shade of their
+ * height's color. The near-black of the side walls would swamp the grooves.
+ */
+function stackedColorAt(baseY: number, topY: number, firstStepY: number): ColorAt {
+  const flat = terrainColorAt(baseY, topY);
+  const span = Math.max(topY - baseY, 1e-6);
+  return (x, y, z, ny) => {
+    // The outer wall runs from the base to the first step's top, so it has to
+    // stay one color all the way up or its long triangles streak.
+    if (ny > 0.3 || y < firstStepY + 1e-3) return flat(x, y, z, ny);
+    const [r, g, b] = DEFAULT_PALETTE.surface((y - baseY) / span);
+    return [r * STEP_WALL_SHADE, g * STEP_WALL_SHADE, b * STEP_WALL_SHADE];
   };
 }
 
@@ -269,24 +287,22 @@ export default function ModelViewer({
     return outlineMask(outline, halfW * 2, halfH * 2, data.width, data.height);
   }, [outline, shape, widthInches, heightInches, rotation, data.width, data.height]);
 
-  const layers = useMemo(
-    () =>
-      layerCount > 0
-        ? terrainLayersFor({
-            bbox,
-            data,
-            shape,
-            widthInches,
-            heightInches,
-            rotation,
-            baseThicknessInches,
-            verticalExaggeration,
-            count: layerCount,
-            insideOutline,
-          })
-        : null,
-    [layerCount, bbox, data, shape, widthInches, heightInches, rotation, baseThicknessInches, verticalExaggeration, insideOutline],
-  );
+  const layers = useMemo(() => {
+    if (layerCount === 0) return null;
+    const plane = { bbox, data, shape, widthInches, heightInches, rotation };
+    const stack = terrainLayersFor({
+      ...plane,
+      baseThicknessInches,
+      verticalExaggeration,
+      count: layerCount,
+      insideOutline,
+    });
+    if (!stack || !resort || !showRuns) return stack;
+    return {
+      ...stack,
+      grooves: resortGroovePaths({ ...plane, resort, areaId, showLifts, minWidthMm: minRunWidthMm }),
+    };
+  }, [layerCount, bbox, data, shape, widthInches, heightInches, rotation, baseThicknessInches, verticalExaggeration, insideOutline, resort, showRuns, showLifts, minRunWidthMm, areaId]);
 
   // --- 1. Bootstrap engine + scene once ---
   useEffect(() => {
@@ -531,7 +547,9 @@ export default function ModelViewer({
               "terrain",
               built.terrain,
               terrainMat,
-              terrainColorAt(baseThicknessInches, topY),
+              layers
+                ? stackedColorAt(baseThicknessInches, topY, layers.levels[1])
+                : terrainColorAt(baseThicknessInches, topY),
               !outline,
             );
             branded.position.y = plinthTopY;

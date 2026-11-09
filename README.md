@@ -174,7 +174,7 @@ against extruded glyph outlines (`lib/mesh/manifold.ts`,
 Scene units are inches. Vertical scale is
 `elevation_m × (print_width_in / bbox_width_m) × verticalExaggeration`,
 so a 1× exaggeration is true-scale. The exaggeration comes from the
-model height setting (1.25" by default): each resort's relief is scaled
+model height setting (0.75" by default): each resort's relief is scaled
 to that height on the print, within 0.5–8×.
 
 For STL export we clone the mesh, scale by 25.4 (mm/in), and let the

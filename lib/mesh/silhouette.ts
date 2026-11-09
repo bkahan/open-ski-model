@@ -77,7 +77,7 @@ function segmentQuad(a: [number, number], b: [number, number], halfWidth: number
 }
 
 /** Drops points closer together than `spacing`, always keeping both ends. */
-function thinnedLine(line: Array<[number, number]>, spacing: number): Array<[number, number]> {
+export function thinnedLine(line: Array<[number, number]>, spacing: number): Array<[number, number]> {
   const kept = [line[0]];
   for (let i = 1; i < line.length - 1; i++) {
     const [lastX, lastY] = kept[kept.length - 1];

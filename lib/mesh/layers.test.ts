@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { ElevationResponse } from "@/lib/elevation/types";
 import type { Bbox } from "@/lib/types";
 
-import { layerLevels, layerTopAt, stackTerrain } from "./layers";
+import { grooveDepthFor, layerLevels, layerTopAt, stackTerrain } from "./layers";
 import { manifoldFromMesh, withSolids } from "./manifold";
 import { buildWatertight } from "./watertight";
 
@@ -35,6 +35,21 @@ describe("layerLevels", () => {
   it("never rounds a step down to nothing", () => {
     const levels = layerLevels(0.25, 0.2501, 4);
     expect(levels[1] - levels[0]).toBeCloseTo(PRINT_LAYER, 6);
+  });
+});
+
+describe("grooveDepthFor", () => {
+  it("caps at 1 mm on tall steps and stays on a print layer", () => {
+    expect(grooveDepthFor(layerLevels(0, 2, 4))).toBeCloseTo(1 / 25.4, 6);
+  });
+
+  it("never takes more than half a short step", () => {
+    const levels = layerLevels(0, 0.2, 8);
+    expect(grooveDepthFor(levels)).toBeLessThanOrEqual((levels[1] - levels[0]) / 2 + 1e-6);
+  });
+
+  it("is at least one print layer", () => {
+    expect(grooveDepthFor(layerLevels(0, 0.001, 4))).toBeCloseTo(PRINT_LAYER, 6);
   });
 });
 
@@ -121,6 +136,32 @@ describe("stackTerrain", () => {
         expect(area).toBeLessThanOrEqual(previous + 1e-6);
         previous = area;
       }
+    });
+  });
+
+  it("cuts grooves into the tops without opening the steps above", () => {
+    const terrain = hill();
+    const top = terrain.boundingBox().max[1];
+    const levels = layerLevels(baseY, top, 6);
+    const depth = grooveDepthFor(levels);
+    const halfWidth = 0.05;
+    const grooves = [
+      {
+        halfWidth,
+        points: Array.from({ length: 121 }, (_, i): [number, number] => [-3 + i * 0.05, 0.02]),
+      },
+    ];
+    const plain = stackTerrain(m, terrain, { levels, baseY });
+    const cut = stackTerrain(m, terrain, { levels, baseY, grooves });
+    const parts = cut.decompose();
+    withSolids([terrain, plain, cut, ...parts], () => {
+      expect(cut.status()).toBe("NoError");
+      expect(parts).toHaveLength(1);
+      const removed = plain.volume() - cut.volume();
+      // One strip across the model, about 6" long, cut once wherever it shows.
+      expect(removed / (6 * 2 * halfWidth * depth)).toBeCloseTo(1, 0);
+
+      expect(cut.boundingBox().max[1]).toBeCloseTo(levels[6], 6);
     });
   });
 

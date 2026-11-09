@@ -58,7 +58,7 @@ no visible text. Replacing both:
 - The print holds its size (6" by default). Dragging the frame changes the
   ground it covers and the map scale, not the inches; changing the inches
   keeps the ground.
-- Model height is set in inches (1.25" default, scaling with the print).
+- Model height is set in inches (0.75" default, scaling with the print).
   Exaggeration follows from each resort's relief, 0.5–8×.
 
 ### Resort silhouette (done)
@@ -80,7 +80,9 @@ no visible text. Replacing both:
 - Smooth or Stacked, 3–16 flat steps (8 by default). Each step is the
   terrain's cross-section at that height, smoothed for printing and kept
   inside the step below. Step heights are whole multiples of 0.2 mm.
-- Runs and lifts sit on the flat tops; contour lines are off.
+- Runs and lifts are cut into the flat tops as round-jointed grooves, up
+  to 1 mm deep and never more than half a step, and they export with the
+  solid. Contour lines are off.
 
 ### Phase R2 — inlay bodies
 

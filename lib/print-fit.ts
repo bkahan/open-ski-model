@@ -2,7 +2,7 @@
 // what it covers, and sets the vertical scale so every resort stands about
 // as tall on the print, whatever its real relief.
 
-export const DEFAULT_RELIEF_INCHES = 1.25;
+export const DEFAULT_RELIEF_INCHES = 0.75;
 export const MIN_COVERAGE_METERS = 500;
 export const MAX_COVERAGE_METERS = 50_000;
 

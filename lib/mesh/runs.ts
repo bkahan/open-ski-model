@@ -15,7 +15,13 @@ import { VertexData } from "@babylonjs/core";
 import { bboxCenter, bboxWidthMeters, metersPerDegLng } from "@/lib/bbox";
 import type { ElevationResponse } from "@/lib/elevation/types";
 import { liftColor, runColor, type ColorScheme, type Rgb } from "@/lib/resort/colors";
-import { layerLevels, layerTopAt, type TerrainLayers } from "@/lib/mesh/layers";
+import {
+  type GroovePath,
+  grooveDepthFor,
+  layerLevels,
+  layerTopAt,
+  type TerrainLayers,
+} from "@/lib/mesh/layers";
 import { frontBearing } from "@/lib/resort/front";
 import type { ResortData } from "@/lib/resort/types";
 import { pointInShape, shapeAABBHalf, type Shape } from "@/lib/shape";
@@ -148,6 +154,32 @@ export function terrainLayersFor(
   return { levels: layerLevels(low, high, spec.count), baseY: spec.baseThicknessInches };
 }
 
+/** Runs and lifts as paths to cut into stacked terrain, at their drawn widths. */
+export function resortGroovePaths(
+  spec: PlaneSpec & {
+    resort: ResortData;
+    areaId?: string | null;
+    showLifts: boolean;
+    minWidthMm: number;
+  },
+): GroovePath[] {
+  const { geoToLocal, inPerMeter } = modelPlane(spec);
+  const { resort, areaId, showLifts, minWidthMm } = spec;
+  const minWidthIn = minWidthMm / MM_PER_INCH;
+  const halfWidth = (meters: number) => Math.max(minWidthIn, meters * inPerMeter) / 2;
+  const belongs = (line: { areas?: string[] }) =>
+    !areaId || !line.areas?.length || line.areas.includes(areaId);
+  const runs = resort.runs
+    .filter((r) => !r.isArea && belongs(r))
+    .map((r) => ({ points: r.coords.map(geoToLocal), halfWidth: halfWidth(DEFAULT_RUN_WIDTH_M) }));
+  const lifts = showLifts
+    ? resort.lifts
+        .filter(belongs)
+        .map((l) => ({ points: l.coords.map(geoToLocal), halfWidth: halfWidth(DEFAULT_LIFT_WIDTH_M) }))
+    : [];
+  return [...runs, ...lifts];
+}
+
 /**
  * Every drawn run and lift as a polyline in the model plane, for tracing an
  * outline. Polygon runs are left out: they aren't drawn, and a backcountry
@@ -186,8 +218,9 @@ export function buildRunRibbons(spec: RunMeshSpec): RibbonGroup[] {
 
   const { geoToLocal, gridW, gridH, inPerMeter } = modelPlane(spec);
   const surface = heightSampler(data, gridW, gridH, baseThicknessInches, inPerMeter * verticalExaggeration);
+  // On stacked terrain the ribbons color the floor of the cut grooves.
   const sampler: HeightSampler = levels
-    ? (x, z) => layerTopAt(levels, surface(x, z))
+    ? (x, z) => layerTopAt(levels, surface(x, z)) - grooveDepthFor(levels)
     : surface;
   const inside = (x: number, z: number) =>
     pointInShape(shape, x, z, widthInches, heightInches, rotation) &&

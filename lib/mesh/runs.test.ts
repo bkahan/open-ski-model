@@ -4,9 +4,11 @@ import type { ElevationResponse } from "@/lib/elevation/types";
 import type { ResortData } from "@/lib/resort/types";
 import type { Bbox } from "@/lib/types";
 
+import { grooveDepthFor } from "./layers";
 import {
   buildRunRibbons,
   resortFrontBearing,
+  resortGroovePaths,
   resortLinesOnPlane,
   terrainLayersFor,
   type RunMeshSpec,
@@ -205,12 +207,24 @@ describe("stacked terrain", () => {
     expect(terrainLayersFor({ ...plane, count: 6, insideOutline: () => false })).toBeNull();
   });
 
+  it("lists runs and lifts as grooves at their printed widths", () => {
+    const withLift: ResortData = {
+      ...resort,
+      lifts: [{ id: "9", type: "chair_lift", coords: centerRun.coords }],
+    };
+    const grooves = resortGroovePaths({ ...plane, resort: withLift, showLifts: true, minWidthMm: 1.2 });
+    expect(grooves).toHaveLength(2);
+    expect(grooves[1].halfWidth).toBeCloseTo(1.2 / 25.4 / 2, 6);
+    expect(resortGroovePaths({ ...plane, resort: withLift, showLifts: false, minWidthMm: 1.2 })).toHaveLength(1);
+  });
+
   it("keeps ribbons on the flat tops, with no quad spanning a step", () => {
     const layerLevels = terrainLayersFor({ ...plane, count: 6 })!.levels;
     const [green] = buildRunRibbons(spec(resort, { data: slope, layerLevels }));
     const positions = green.vertexData.positions as Float32Array;
     const indices = green.vertexData.indices as Uint32Array;
-    const onATop = (y: number) => layerLevels.some((l) => Math.abs(l + 0.01 - y) < 1e-4);
+    const sink = grooveDepthFor(layerLevels);
+    const onATop = (y: number) => layerLevels.some((l) => Math.abs(l - sink + 0.01 - y) < 1e-4);
     for (let i = 1; i < positions.length; i += 3) expect(onATop(positions[i])).toBe(true);
     for (let t = 0; t < indices.length; t += 3) {
       const a = positions[indices[t] * 3 + 1];
