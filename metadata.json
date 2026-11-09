@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "builtAt": "2026-11-09T01:41:20.289Z",
+  "source": "https://tiles.openskimap.org",
+  "cellDeg": 1,
+  "cells": 2077,
+  "runs": 231016,
+  "lifts": 33383,
+  "skiAreas": 12405,
+  "runsKept": 110140,
+  "liftsKept": 31008,
+  "skiAreasKept": 4764,
+  "attribution": "Data from OpenSkiData / OpenSkiMap.org, © OpenStreetMap contributors (ODbL), Skimap.org, Who's On First, © Mapterhorn"
+}
