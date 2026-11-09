@@ -14,8 +14,9 @@ import { VertexData } from "@babylonjs/core";
 
 import { bboxCenter, bboxWidthMeters, metersPerDegLng } from "@/lib/bbox";
 import type { ElevationResponse } from "@/lib/elevation/types";
-import { liftColor, runColor, type ColorScheme, type Rgb } from "@/lib/resort/colors";
+import { LIFT_COLOR, liftColor, runColor, type ColorScheme, type Rgb } from "@/lib/resort/colors";
 import {
+  type GrooveGroup,
   type GroovePath,
   grooveDepthFor,
   layerLevels,
@@ -154,30 +155,49 @@ export function terrainLayersFor(
   return { levels: layerLevels(low, high, spec.count), baseY: spec.baseThicknessInches };
 }
 
-/** Runs and lifts as paths to cut into stacked terrain, at their drawn widths. */
-export function resortGroovePaths(
+/** Where lines cross, the higher one wins: lifts over black over blue over green. */
+const GROOVE_COLOR_PRIORITY = ["lift", "black", "red", "orange", "blue", "green", "gray"];
+
+/** Runs and lifts by color, to cut into stacked terrain at their drawn widths. */
+export function resortGrooveGroups(
   spec: PlaneSpec & {
     resort: ResortData;
     areaId?: string | null;
+    scheme: ColorScheme;
     showLifts: boolean;
     minWidthMm: number;
   },
-): GroovePath[] {
+): GrooveGroup[] {
   const { geoToLocal, inPerMeter } = modelPlane(spec);
-  const { resort, areaId, showLifts, minWidthMm } = spec;
+  const { resort, areaId, scheme, showLifts, minWidthMm } = spec;
   const minWidthIn = minWidthMm / MM_PER_INCH;
   const halfWidth = (meters: number) => Math.max(minWidthIn, meters * inPerMeter) / 2;
   const belongs = (line: { areas?: string[] }) =>
     !areaId || !line.areas?.length || line.areas.includes(areaId);
-  const runs = resort.runs
-    .filter((r) => !r.isArea && belongs(r))
-    .map((r) => ({ points: r.coords.map(geoToLocal), halfWidth: halfWidth(DEFAULT_RUN_WIDTH_M) }));
-  const lifts = showLifts
-    ? resort.lifts
-        .filter(belongs)
-        .map((l) => ({ points: l.coords.map(geoToLocal), halfWidth: halfWidth(DEFAULT_LIFT_WIDTH_M) }))
-    : [];
-  return [...runs, ...lifts];
+  const byColor = new Map<string, GroovePath[]>();
+  const add = (color: string, path: GroovePath) => {
+    byColor.set(color, [...(byColor.get(color) ?? []), path]);
+  };
+  for (const run of resort.runs) {
+    if (run.isArea || !belongs(run)) continue;
+    add(runColor(run.difficulty, scheme).name, {
+      points: run.coords.map(geoToLocal),
+      halfWidth: halfWidth(DEFAULT_RUN_WIDTH_M),
+    });
+  }
+  if (showLifts) {
+    for (const lift of resort.lifts) {
+      if (!belongs(lift)) continue;
+      add(LIFT_COLOR.name, {
+        points: lift.coords.map(geoToLocal),
+        halfWidth: halfWidth(DEFAULT_LIFT_WIDTH_M),
+      });
+    }
+  }
+  return GROOVE_COLOR_PRIORITY.filter((key) => byColor.has(key)).map((key) => ({
+    key,
+    paths: byColor.get(key)!,
+  }));
 }
 
 /**

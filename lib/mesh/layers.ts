@@ -22,8 +22,15 @@ const SMOOTHING_RADIUS_IN = 0.5 / MM_PER_INCH;
 const MIN_ISLAND_AREA_IN2 = 6 / (MM_PER_INCH * MM_PER_INCH);
 const ARC_SEGMENTS = 24;
 const SIMPLIFY_IN = 0.1 / MM_PER_INCH;
+const RIM_OVERLAP_IN = 0.2 / MM_PER_INCH;
 const MAX_GROOVE_DEPTH_IN = 1 / MM_PER_INCH;
+/** Three print layers: enough for a dark inlay over white, without extra swaps. */
+const FILAMENT_INLAY_DEPTH_IN = 0.6 / MM_PER_INCH;
+/** Narrower color regions than twice this can't be laid down cleanly. */
+const INLAY_MIN_HALF_WIDTH_IN = 0.4 / MM_PER_INCH;
+const MIN_INLAY_AREA_IN2 = 1 / (MM_PER_INCH * MM_PER_INCH);
 const GROOVE_POINT_SPACING_IN = 0.02;
+const SLIVER_ARC_SEGMENTS = 12;
 const GROOVE_JOINT_SIDES = 12;
 
 export interface GroovePath {
@@ -32,13 +39,31 @@ export interface GroovePath {
   halfWidth: number;
 }
 
+export interface GrooveGroup {
+  /** Color these paths print in. */
+  key: string;
+  paths: GroovePath[];
+}
+
 export interface TerrainLayers {
   /** Step boundaries in y, lowest first; layer k runs from levels[k] to levels[k + 1]. */
   levels: number[];
   /** Top of the solid base under the terrain surface. */
   baseY: number;
-  /** Runs and lifts to cut into the flat tops. */
-  grooves?: GroovePath[];
+  /** Runs and lifts to cut into the flat tops, highest priority first where they cross. */
+  grooves?: GrooveGroup[];
+  /** Also return the grooves as solids, cut at filament depth, for multicolor printing. */
+  filamentInlays?: boolean;
+}
+
+export interface ColorInlay {
+  key: string;
+  solid: Manifold;
+}
+
+export interface StackedTerrain {
+  terrain: Manifold;
+  inlays: ColorInlay[];
 }
 
 /** Evenly spaced step boundaries from the lowest surface point up. */
@@ -55,6 +80,10 @@ export function grooveDepthFor(levels: number[]): number {
   return Math.max(1, printLayers) * PRINT_LAYER_IN;
 }
 
+function filamentDepthFor(levels: number[]): number {
+  return Math.min(FILAMENT_INLAY_DEPTH_IN, grooveDepthFor(levels));
+}
+
 /** The flat top that a point on the smooth surface lands on. */
 export function layerTopAt(levels: number[], y: number): number {
   for (let k = 1; k < levels.length; k++) {
@@ -63,10 +92,14 @@ export function layerTopAt(levels: number[], y: number): number {
   return levels[levels.length - 1];
 }
 
-function withoutSmallIslands(m: ManifoldToplevel, section: CrossSection): CrossSection {
+function withoutSmallIslands(
+  m: ManifoldToplevel,
+  section: CrossSection,
+  minArea = MIN_ISLAND_AREA_IN2,
+): CrossSection {
   const parts = section.decompose();
   try {
-    return m.CrossSection.compose(parts.filter((p) => p.area() >= MIN_ISLAND_AREA_IN2));
+    return m.CrossSection.compose(parts.filter((p) => p.area() >= minArea));
   } finally {
     for (const p of parts) p.delete();
   }
@@ -132,35 +165,111 @@ function prismToHeight(section: CrossSection, height: number): Manifold {
   }
 }
 
-/** Solid columns for one step: full height, with the groove left out of the top. */
-function stepColumns(
+/** Each group's area, with anything claimed by a higher-priority group taken out. */
+function exclusiveGrooves(
+  m: ManifoldToplevel,
+  groups: GrooveGroup[],
+  printable: boolean,
+): Array<{ key: string; section: CrossSection }> {
+  const exclusive: Array<{ key: string; section: CrossSection }> = [];
+  let claimed: CrossSection | null = null;
+  try {
+    for (const group of groups) {
+      const whole = grooveSection(m, group.paths);
+      try {
+        const remaining: CrossSection = claimed ? whole.subtract(claimed) : whole.translate([0, 0]);
+        const section: CrossSection = printable ? pipeSections(remaining, [withoutSlivers]) : remaining;
+        exclusive.push({ key: group.key, section });
+        const next: CrossSection = claimed ? claimed.add(whole) : whole.translate([0, 0]);
+        claimed?.delete();
+        claimed = next;
+      } finally {
+        whole.delete();
+      }
+    }
+    return exclusive;
+  } catch (err) {
+    for (const { section } of exclusive) section.delete();
+    throw err;
+  } finally {
+    claimed?.delete();
+  }
+}
+
+function withoutSlivers(section: CrossSection): CrossSection {
+  const r = INLAY_MIN_HALF_WIDTH_IN;
+  return pipeSections(section.simplify(SIMPLIFY_IN), [
+    (s) => s.offset(-r, "Round", 2, SLIVER_ARC_SEGMENTS),
+    (s) => s.offset(r, "Round", 2, SLIVER_ARC_SEGMENTS),
+    (s) => s.intersect(section),
+  ]);
+}
+
+function inlayPrism(section: CrossSection, top: number, depth: number): Manifold {
+  const column = prismToHeight(section, depth);
+  try {
+    return column.translate([0, top - depth, 0]);
+  } finally {
+    column.delete();
+  }
+}
+
+interface StepBuild {
+  columns: Manifold[];
+  inlays: Array<{ key: string; solid: Manifold }>;
+}
+
+/** One step: solid columns with the grooves left out, and optionally the fills. */
+function buildStep(
+  m: ManifoldToplevel,
   contour: CrossSection,
   above: CrossSection | null,
-  grooves: CrossSection | null,
+  grooves: Array<{ key: string; section: CrossSection }>,
   top: number,
   depth: number,
-): Manifold[] {
-  if (!grooves) return [prismToHeight(contour, top)];
+  printable: boolean,
+): StepBuild {
+  const built: StepBuild = { columns: [], inlays: [] };
+  if (grooves.length === 0) {
+    built.columns.push(prismToHeight(contour, top));
+    return built;
+  }
+
   const sections: CrossSection[] = [];
   const held = (section: CrossSection) => {
     sections.push(section);
     return section;
   };
-  const columns: Manifold[] = [];
   try {
     // Only the part of this step left uncovered by the next one gets cut:
     // a groove here must not run through the solid under the step above.
     const exposed = above ? held(contour.subtract(above)) : contour;
-    const cut = held(exposed.intersect(grooves));
-    if (cut.isEmpty()) {
-      columns.push(prismToHeight(contour, top));
-      return columns;
+    const cuts = grooves
+      .map(({ key, section }) => {
+        const clipped = held(exposed.intersect(section));
+        return { key, cut: printable ? held(withoutSmallIslands(m, clipped, MIN_INLAY_AREA_IN2)) : clipped };
+      })
+      .filter(({ cut }) => !cut.isEmpty());
+    if (cuts.length === 0) {
+      built.columns.push(prismToHeight(contour, top));
+      return built;
     }
-    columns.push(prismToHeight(contour, top - depth));
-    columns.push(prismToHeight(held(contour.subtract(cut)), top));
-    return columns;
+
+    const allCuts = held(m.CrossSection.union(cuts.map(({ cut }) => cut)));
+    // The rim is only a cap on the column, with a little overlap to fuse.
+    // Running it down to y = 0 alongside the column makes the union several
+    // times slower, because the two share every wall for their full height.
+    built.columns.push(prismToHeight(contour, top - depth));
+    built.columns.push(inlayPrism(held(contour.subtract(allCuts)), top, depth + RIM_OVERLAP_IN));
+    if (printable) {
+      for (const { key, cut } of cuts) {
+        built.inlays.push({ key, solid: inlayPrism(cut, top, depth) });
+      }
+    }
+    return built;
   } catch (err) {
-    for (const c of columns) c.delete();
+    for (const c of built.columns) c.delete();
+    for (const i of built.inlays) i.solid.delete();
     throw err;
   } finally {
     for (const s of sections) s.delete();
@@ -168,21 +277,37 @@ function stepColumns(
 }
 
 /**
+ * A groove that exactly follows a step's edges can come out of the union
+ * as a sealed, inside-out shell. Slicers would read it as a hollow.
+ */
+function withoutInvertedShells(m: ManifoldToplevel, solid: Manifold): Manifold {
+  const shells = solid.decompose();
+  try {
+    if (shells.length === 1) return solid.translate([0, 0, 0]);
+    return m.Manifold.compose(shells.filter((shell) => shell.volume() > 0));
+  } finally {
+    solid.delete();
+    for (const shell of shells) shell.delete();
+  }
+}
+
+/**
  * Replace a terrain solid with its stacked version. Each step is a solid
  * column from y = 0, so neighbors overlap instead of merely touching.
- * The caller owns the result; `terrain` is left alone.
+ * The caller owns the results; `terrain` is left alone.
  */
 export function stackTerrain(
   m: ManifoldToplevel,
   terrain: Manifold,
-  { levels, baseY, grooves }: TerrainLayers,
-): Manifold {
+  { levels, baseY, grooves, filamentInlays = false }: TerrainLayers,
+): StackedTerrain {
   // Standing the model on end makes model y the slicing axis. Sections
   // come out as (x, -z), which rotating back undoes.
   const upright = terrain.rotate([90, 0, 0]);
   const contours: CrossSection[] = [];
   const columns: Manifold[] = [];
-  let grooveCut: CrossSection | null = null;
+  const pieces = new Map<string, Manifold[]>();
+  let exclusive: Array<{ key: string; section: CrossSection }> = [];
   try {
     for (let k = 0; k + 1 < levels.length; k++) {
       // Layer 0 is the whole footprint, read mid-base where it is clean.
@@ -196,18 +321,24 @@ export function stackTerrain(
       contours.push(contour);
     }
 
-    grooveCut = grooves?.length ? grooveSection(m, grooves) : null;
-    const depth = grooveDepthFor(levels);
+    exclusive = grooves?.length ? exclusiveGrooves(m, grooves, filamentInlays) : [];
+    const depth = filamentInlays ? filamentDepthFor(levels) : grooveDepthFor(levels);
     contours.forEach((contour, k) => {
-      columns.push(
-        ...stepColumns(contour, contours[k + 1] ?? null, grooveCut, levels[k + 1], depth),
-      );
+      const step = buildStep(m, contour, contours[k + 1] ?? null, exclusive, levels[k + 1], depth, filamentInlays);
+      columns.push(...step.columns);
+      for (const { key, solid } of step.inlays) {
+        pieces.set(key, [...(pieces.get(key) ?? []), solid]);
+      }
     });
-    return m.Manifold.union(columns);
+
+    const result = withoutInvertedShells(m, m.Manifold.union(columns));
+    const inlays = [...pieces].map(([key, solids]) => ({ key, solid: m.Manifold.compose(solids) }));
+    return { terrain: result, inlays };
   } finally {
     upright.delete();
-    grooveCut?.delete();
     for (const c of contours) c.delete();
     for (const c of columns) c.delete();
+    for (const { section } of exclusive) section.delete();
+    for (const solids of pieces.values()) for (const s of solids) s.delete();
   }
 }

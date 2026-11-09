@@ -34,8 +34,10 @@ import {
   DEFAULT_PALETTE,
 } from "@/lib/mesh/watertight";
 import { buildContourLines } from "@/lib/mesh/contours";
-import { buildModelSolids, unionForExport, type BuiltModel } from "@/lib/mesh/engrave";
-import { loadManifold, vertexDataFromManifold, type ColorAt } from "@/lib/mesh/manifold";
+import { buildModelSolids, unionForExport, type BuiltModel, type ModelSpec } from "@/lib/mesh/engrave";
+import { loadManifold, vertexDataFromManifold, type ColorAt, type TriMesh } from "@/lib/mesh/manifold";
+import { buildColorBodies } from "@/lib/mesh/multicolor";
+import { buildThreeMf } from "@/lib/mesh/three-mf";
 import { plateFacingDeg } from "@/lib/mesh/nameplate";
 import {
   buildResortOutline,
@@ -48,7 +50,7 @@ import {
   buildRunRibbons,
   resortFrontBearing,
   resortLinesOnPlane,
-  resortGroovePaths,
+  resortGrooveGroups,
   terrainLayersFor,
 } from "@/lib/mesh/runs";
 import { exportToStep } from "@/lib/mesh/step-export";
@@ -175,6 +177,7 @@ function freeBuilt(built: BuiltModel | null) {
   built.terrain.delete();
   built.plinth?.delete();
   for (const s of built.inlays) s.delete();
+  for (const inlay of built.grooveInlays) inlay.solid.delete();
 }
 
 const MM_PER_INCH = 25.4;
@@ -206,6 +209,8 @@ export default function ModelViewer({
   const sceneRef = useRef<Scene | null>(null);
   const cameraRef = useRef<ArcRotateCamera | null>(null);
   const framedDataRef = useRef<ElevationResponse | null>(null);
+  const buildInputsRef = useRef<{ mesh: TriMesh; spec: ModelSpec } | null>(null);
+  const [secondAms, setSecondAms] = useState(false);
   const terrainRef = useRef<Mesh | null>(null);
   const plinthRef = useRef<Mesh | null>(null);
   const contoursRef = useRef<Mesh | null>(null);
@@ -300,9 +305,9 @@ export default function ModelViewer({
     if (!stack || !resort || !showRuns) return stack;
     return {
       ...stack,
-      grooves: resortGroovePaths({ ...plane, resort, areaId, showLifts, minWidthMm: minRunWidthMm }),
+      grooves: resortGrooveGroups({ ...plane, resort, areaId, scheme: colorScheme, showLifts, minWidthMm: minRunWidthMm }),
     };
-  }, [layerCount, bbox, data, shape, widthInches, heightInches, rotation, baseThicknessInches, verticalExaggeration, insideOutline, resort, showRuns, showLifts, minRunWidthMm, areaId]);
+  }, [layerCount, bbox, data, shape, widthInches, heightInches, rotation, baseThicknessInches, verticalExaggeration, insideOutline, resort, showRuns, showLifts, minRunWidthMm, areaId, colorScheme]);
 
   // --- 1. Bootstrap engine + scene once ---
   useEffect(() => {
@@ -515,25 +520,29 @@ export default function ModelViewer({
     // Font and WASM load once; after that the whole pass takes well
     // under a second even at high density. Results replace the plain
     // meshes above unless the inputs changed meanwhile.
+    const modelSpec: ModelSpec = {
+      shape,
+      widthInches,
+      heightInches,
+      rotation,
+      facing: plateFacing,
+      label: label ?? "",
+      plinth: engraveLabel,
+      brand: engraveBrand,
+      outline,
+      layers,
+    };
+    const terrainTriMesh =
+      vertexData.positions && vertexData.indices
+        ? { positions: vertexData.positions, indices: vertexData.indices }
+        : null;
+    buildInputsRef.current = terrainTriMesh ? { mesh: terrainTriMesh, spec: modelSpec } : null;
     if (engraveLabel || engraveBrand || outline || layers) {
-      const positions = vertexData.positions;
-      const indices = vertexData.indices;
       (async () => {
         try {
           const [m, font] = await Promise.all([loadManifold(), loadFont()]);
-          if (cancelled || !positions || !indices) return;
-          const built = buildModelSolids(m, font, { positions, indices }, {
-            shape,
-            widthInches,
-            heightInches,
-            rotation,
-            facing: plateFacing,
-            label: label ?? "",
-            plinth: engraveLabel,
-            brand: engraveBrand,
-            outline,
-            layers,
-          });
+          if (cancelled || !terrainTriMesh) return;
+          const built = buildModelSolids(m, font, terrainTriMesh, modelSpec);
           if (cancelled) {
             freeBuilt(built);
             return;
@@ -730,17 +739,28 @@ export default function ModelViewer({
         { positions: Array.from(geom.positions), indices: Array.from(geom.indices) },
         { name: stepName, unitScale: MM_PER_INCH },
       );
-      const blob = new Blob([stepStr], { type: "application/STEP" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = stepName + ".step";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      downloadBlob(new Blob([stepStr], { type: "application/STEP" }), stepName + ".step");
     }).catch((err: unknown) => console.error("[step] export failed", err));
   }, [label, exportGeometry]);
+
+  const exportThreeMfFile = useCallback(() => {
+    const inputs = buildInputsRef.current;
+    if (!inputs) return;
+    (async () => {
+      const [m, font] = await Promise.all([loadManifold(), loadFont()]);
+      const { spec, mesh } = inputs;
+      const layersForPrint = spec.layers ? { ...spec.layers, filamentInlays: true } : null;
+      const built = buildModelSolids(m, font, mesh, { ...spec, layers: layersForPrint });
+      try {
+        const { parts, filaments } = buildColorBodies(m, built, layersForPrint, secondAms);
+        const title = label || "Ski model";
+        const blob = await buildThreeMf(title, parts, filaments);
+        downloadBlob(blob, slug(title) + ".3mf");
+      } finally {
+        freeBuilt(built);
+      }
+    })().catch((err: unknown) => console.error("[3mf] export failed", err));
+  }, [label, secondAms]);
 
   return (
     <div className="relative w-full h-full">
@@ -788,12 +808,39 @@ export default function ModelViewer({
         >
           Export STEP
         </button>
+        <button
+          type="button"
+          onClick={exportThreeMfFile}
+          className="w-full rounded-md border border-amber-400/60 text-amber-200 font-semibold py-1.5 hover:bg-amber-400/10 transition"
+        >
+          Export 3MF (multicolor)
+        </button>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={secondAms}
+            onChange={(e) => setSecondAms(e.target.checked)}
+            className="accent-amber-400"
+          />
+          <span className="text-slate-300">Second AMS (forest, gray lifts)</span>
+        </label>
         <p className="text-[10px] text-slate-500 leading-snug">
-          STL for slicers, STEP for CAD. Both export in millimeters.
+          STL for slicers, STEP for CAD, 3MF with a body per filament. All in millimeters.
         </p>
       </div>
     </div>
   );
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function slug(s: string): string {

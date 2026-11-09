@@ -105,7 +105,7 @@ describe("stackTerrain", () => {
     const terrain = hill();
     const top = terrain.boundingBox().max[1];
     const levels = layerLevels(baseY, top, 6);
-    const stacked = stackTerrain(m, terrain, { levels, baseY });
+    const stacked = stackTerrain(m, terrain, { levels, baseY }).terrain;
     const parts = stacked.decompose();
     withSolids([terrain, stacked, ...parts], () => {
       expect(stacked.status()).toBe("NoError");
@@ -125,7 +125,7 @@ describe("stackTerrain", () => {
     const terrain = hill();
     const top = terrain.boundingBox().max[1];
     const levels = layerLevels(baseY, top, 6);
-    const stacked = stackTerrain(m, terrain, { levels, baseY });
+    const stacked = stackTerrain(m, terrain, { levels, baseY }).terrain;
     const upright = stacked.rotate([90, 0, 0]);
     withSolids([terrain, stacked, upright], () => {
       let previous = Infinity;
@@ -147,12 +147,17 @@ describe("stackTerrain", () => {
     const halfWidth = 0.05;
     const grooves = [
       {
-        halfWidth,
-        points: Array.from({ length: 121 }, (_, i): [number, number] => [-3 + i * 0.05, 0.02]),
+        key: "blue",
+        paths: [
+          {
+            halfWidth,
+            points: Array.from({ length: 121 }, (_, i): [number, number] => [-3 + i * 0.05, 0.02]),
+          },
+        ],
       },
     ];
-    const plain = stackTerrain(m, terrain, { levels, baseY });
-    const cut = stackTerrain(m, terrain, { levels, baseY, grooves });
+    const plain = stackTerrain(m, terrain, { levels, baseY }).terrain;
+    const cut = stackTerrain(m, terrain, { levels, baseY, grooves }).terrain;
     const parts = cut.decompose();
     withSolids([terrain, plain, cut, ...parts], () => {
       expect(cut.status()).toBe("NoError");
@@ -165,10 +170,59 @@ describe("stackTerrain", () => {
     });
   });
 
+  it("makes fill bodies that exactly refill the grooves", () => {
+    const terrain = hill();
+    const top = terrain.boundingBox().max[1];
+    const levels = layerLevels(baseY, top, 6);
+    const strip = (x: number, key: string) => ({
+      key,
+      paths: [
+        {
+          halfWidth: 0.05,
+          points: Array.from({ length: 101 }, (_, i): [number, number] => [x, -2.5 + i * 0.05]),
+        },
+      ],
+    });
+    const plain = stackTerrain(m, terrain, { levels, baseY }).terrain;
+    const { terrain: cut, inlays } = stackTerrain(m, terrain, {
+      levels,
+      baseY,
+      grooves: [strip(0, "black"), strip(0.05, "blue")],
+      filamentInlays: true,
+    });
+    withSolids([terrain, plain, cut, ...inlays.map((i) => i.solid)], () => {
+      expect(inlays.map((i) => i.key).sort()).toEqual(["black", "blue"]);
+      const filled = inlays.reduce((sum, i) => sum + i.solid.volume(), 0);
+      expect(cut.volume() + filled).toBeCloseTo(plain.volume(), 3);
+      const [black, blue] = ["black", "blue"].map((k) => inlays.find((i) => i.key === k)!.solid);
+      // The higher-priority color keeps the crossing.
+      expect(black.volume()).toBeGreaterThan(blue.volume());
+      for (const { solid } of inlays) {
+        const overlap = m.Manifold.intersection(solid, cut);
+        expect(overlap.volume()).toBeLessThan(1e-5);
+        overlap.delete();
+      }
+    });
+  });
+
+  it("drops color slivers too narrow to print", () => {
+    const terrain = hill();
+    const top = terrain.boundingBox().max[1];
+    const levels = layerLevels(baseY, top, 3);
+    const hairline = {
+      key: "blue",
+      paths: [{ halfWidth: 0.01, points: Array.from({ length: 41 }, (_, i): [number, number] => [-2 + i * 0.1, 2]) }],
+    };
+    const { terrain: cut, inlays } = stackTerrain(m, terrain, { levels, baseY, grooves: [hairline], filamentInlays: true });
+    withSolids([terrain, cut, ...inlays.map((i) => i.solid)], () => {
+      expect(inlays).toHaveLength(0);
+    });
+  });
+
   it("stays close to the smooth terrain's volume", () => {
     const terrain = hill();
     const top = terrain.boundingBox().max[1];
-    const stacked = stackTerrain(m, terrain, { levels: layerLevels(baseY, top, 16), baseY });
+    const stacked = stackTerrain(m, terrain, { levels: layerLevels(baseY, top, 16), baseY }).terrain;
     withSolids([terrain, stacked], () => {
       expect(stacked.volume() / terrain.volume()).toBeCloseTo(1, 0);
     });

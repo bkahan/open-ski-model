@@ -17,7 +17,7 @@ import {
   type PlateSide,
 } from "./nameplate";
 import { buildPlinthSolid, plinthHeightInches } from "./plinth";
-import { stackTerrain, type TerrainLayers } from "./layers";
+import { type ColorInlay, stackTerrain, type TerrainLayers } from "./layers";
 import { buildOutlinePlinth, OUTLINE_PLINTH_HEIGHT_IN, outlinePrism } from "./silhouette";
 import { buildTextSolid, fontSizeForCapHeight, measureTextWidth, type Contour } from "./text";
 
@@ -47,6 +47,8 @@ export interface BuiltModel {
   plinth: Manifold | null;
   /** Name-plate fill bodies (one per glyph + the rose), for multicolor printing. */
   inlays: Manifold[];
+  /** Run and lift fills by color, when asked for. Same space as `terrain`. */
+  grooveInlays: ColorInlay[];
   plinthHeight: number;
   nameplate: NameplateLayout | null;
 }
@@ -93,10 +95,14 @@ export function buildModelSolids(
       terrain = cut;
     }
 
+    let grooveInlays: ColorInlay[] = [];
     if (spec.layers) {
-      const stacked = own(stackTerrain(m, terrain, spec.layers));
+      const stacked = stackTerrain(m, terrain, spec.layers);
+      own(stacked.terrain);
+      for (const inlay of stacked.inlays) own(inlay.solid);
       release(terrain);
-      terrain = stacked;
+      terrain = stacked.terrain;
+      grooveInlays = stacked.inlays;
     }
 
     let brandSpin = spec.rotation + plateTurnDeg(spec);
@@ -146,7 +152,7 @@ export function buildModelSolids(
       }
     }
 
-    return { terrain, plinth, inlays, plinthHeight, nameplate };
+    return { terrain, plinth, inlays, grooveInlays, plinthHeight, nameplate };
   } catch (err) {
     for (const s of owned) s.delete();
     throw err;

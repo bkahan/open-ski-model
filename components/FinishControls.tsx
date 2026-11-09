@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 // Surface finish: the terrain's real slope, or flat stacked elevation steps
 // like a laser-cut contour model.
 
@@ -21,6 +23,13 @@ const BUTTON_IDLE = "border-slate-700 text-slate-400 hover:border-slate-500 hove
 
 export default function FinishControls({ layerCount, onChange }: Props) {
   const stacked = layerCount > 0;
+  // Rebuilding the stack takes seconds, so the slider only commits on release.
+  const [draft, setDraft] = useState<number | null>(null);
+  const shown = draft ?? layerCount;
+  const commitDraft = () => {
+    if (draft !== null) onChange(draft);
+    setDraft(null);
+  };
   return (
     <fieldset className="space-y-2">
       <legend className="text-slate-400 uppercase tracking-wider text-xs mb-1">
@@ -55,11 +64,13 @@ export default function FinishControls({ layerCount, onChange }: Props) {
             min={MIN_LAYER_COUNT}
             max={MAX_LAYER_COUNT}
             step={1}
-            value={layerCount}
-            onChange={(e) => onChange(parseInt(e.target.value, 10))}
+            value={shown}
+            onChange={(e) => setDraft(parseInt(e.target.value, 10))}
+            onPointerUp={commitDraft}
+            onKeyUp={commitDraft}
             className="flex-1 accent-amber-400"
           />
-          <span className="font-mono text-xs w-6 text-right">{layerCount}</span>
+          <span className="font-mono text-xs w-6 text-right">{shown}</span>
         </div>
       )}
     </fieldset>

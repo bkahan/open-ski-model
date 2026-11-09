@@ -84,6 +84,15 @@ no visible text. Replacing both:
   to 1 mm deep and never more than half a step, and they export with the
   solid. Contour lines are off.
 
+### Multicolor 3MF (first pass done, needs a slicer test)
+
+- Export 3MF writes one body per filament as one assembly, with filament
+  numbers in `Metadata/model_settings.config` for Bambu Studio and Orca.
+- One AMS: white, three trail colors, black lifts and text. Second AMS:
+  every color separate, gray lifts, forest below 60% of the steps.
+- Fills are 3 layers (0.6 mm), lose crossings by priority (lifts, black,
+  red, orange, blue, green), and drop regions under 0.8 mm wide.
+
 ### Phase R2 — inlay bodies
 
 - Turn each color group into a solid: ribbon extruded ~0.8 mm down into

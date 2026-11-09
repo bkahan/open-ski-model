@@ -8,7 +8,7 @@ import { grooveDepthFor } from "./layers";
 import {
   buildRunRibbons,
   resortFrontBearing,
-  resortGroovePaths,
+  resortGrooveGroups,
   resortLinesOnPlane,
   terrainLayersFor,
   type RunMeshSpec,
@@ -207,15 +207,15 @@ describe("stacked terrain", () => {
     expect(terrainLayersFor({ ...plane, count: 6, insideOutline: () => false })).toBeNull();
   });
 
-  it("lists runs and lifts as grooves at their printed widths", () => {
+  it("groups grooves by color, highest priority first, at printed widths", () => {
     const withLift: ResortData = {
       ...resort,
       lifts: [{ id: "9", type: "chair_lift", coords: centerRun.coords }],
     };
-    const grooves = resortGroovePaths({ ...plane, resort: withLift, showLifts: true, minWidthMm: 1.2 });
-    expect(grooves).toHaveLength(2);
-    expect(grooves[1].halfWidth).toBeCloseTo(1.2 / 25.4 / 2, 6);
-    expect(resortGroovePaths({ ...plane, resort: withLift, showLifts: false, minWidthMm: 1.2 })).toHaveLength(1);
+    const groups = resortGrooveGroups({ ...plane, resort: withLift, scheme: "na", showLifts: true, minWidthMm: 1.2 });
+    expect(groups.map((g) => g.key)).toEqual(["lift", "green"]);
+    expect(groups[0].paths[0].halfWidth).toBeCloseTo(1.2 / 25.4 / 2, 6);
+    expect(resortGrooveGroups({ ...plane, resort: withLift, scheme: "na", showLifts: false, minWidthMm: 1.2 }).map((g) => g.key)).toEqual(["green"]);
   });
 
   it("keeps ribbons on the flat tops, with no quad spanning a step", () => {
