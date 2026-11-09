@@ -81,6 +81,8 @@ interface Props {
   resort: ResortData | null;
   /** Cut the model to the resort's outline when there is one. */
   silhouette: boolean;
+  /** The ski area picked from search; its neighbors stay out of the outline. */
+  areaId: string | null;
   /** Stack the terrain into this many flat steps; 0 keeps it smooth. */
   layerCount: number;
   /** Drape the runs (and, with showLifts, the lifts) on the terrain. */
@@ -99,14 +101,39 @@ function meshFromSolid(
   solid: Manifold,
   material: StandardMaterial,
   colorAt?: ColorAt,
+  outlineEdges = true,
 ): Mesh {
   const mesh = new Mesh(name, scene);
   vertexDataFromManifold(solid, colorAt).applyToMesh(mesh, true);
   mesh.material = material;
-  mesh.enableEdgesRendering(0.95);
-  mesh.edgesWidth = 1.5;
-  mesh.edgesColor = EDGE_COLOR;
+  if (outlineEdges) {
+    mesh.enableEdgesRendering(0.95);
+    mesh.edgesWidth = 1.5;
+    mesh.edgesColor = EDGE_COLOR;
+  }
   return mesh;
+}
+
+/** Point the camera at the whole model, from the side the name faces. */
+function frameCameraOn(camera: ArcRotateCamera, built: BuiltModel, facingDeg: number) {
+  const terrain = built.terrain.boundingBox();
+  const boxes = built.plinth ? [terrain, built.plinth.boundingBox()] : [terrain];
+  const minAt = (i: number) => Math.min(...boxes.map((b) => b.min[i]));
+  const maxAt = (i: number) =>
+    i === 1 ? terrain.max[1] + built.plinthHeight : Math.max(...boxes.map((b) => b.max[i]));
+  const center = [0, 1, 2].map((i) => (minAt(i) + maxAt(i)) / 2);
+  const halfDiagonal = Math.hypot(...[0, 1, 2].map((i) => (maxAt(i) - minAt(i)) / 2));
+
+  const halfFovY = camera.fov / 2;
+  const aspect = camera.getEngine().getAspectRatio(camera);
+  const halfFovX = Math.atan(Math.tan(halfFovY) * aspect);
+  const fittedRadius = halfDiagonal / Math.sin(Math.min(halfFovX, halfFovY));
+
+  camera.setTarget(new Vector3(center[0], center[1], center[2]));
+  camera.alpha = Math.PI / 2 - (facingDeg * Math.PI) / 180;
+  camera.beta = Math.PI / 3;
+  camera.upperRadiusLimit = Math.max(camera.upperRadiusLimit ?? 0, fittedRadius * 2);
+  camera.radius = fittedRadius;
 }
 
 const UNDERSIDE_COLOR: [number, number, number] = [0.78, 0.79, 0.82];
@@ -149,6 +176,7 @@ export default function ModelViewer({
   label,
   resort,
   silhouette,
+  areaId,
   layerCount,
   showRuns,
   colorScheme,
@@ -158,6 +186,8 @@ export default function ModelViewer({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const engineRef = useRef<Engine | null>(null);
   const sceneRef = useRef<Scene | null>(null);
+  const cameraRef = useRef<ArcRotateCamera | null>(null);
+  const framedDataRef = useRef<ElevationResponse | null>(null);
   const terrainRef = useRef<Mesh | null>(null);
   const plinthRef = useRef<Mesh | null>(null);
   const contoursRef = useRef<Mesh | null>(null);
@@ -177,9 +207,9 @@ export default function ModelViewer({
   const outlineInputs = useMemo(
     () =>
       silhouette && resort && shape === "rectangle"
-        ? { bbox, data, shape, widthInches, heightInches, rotation, resort }
+        ? { bbox, data, shape, widthInches, heightInches, rotation, resort, areaId }
         : null,
-    [silhouette, resort, bbox, data, shape, widthInches, heightInches, rotation],
+    [silhouette, resort, areaId, bbox, data, shape, widthInches, heightInches, rotation],
   );
   const [traced, setTraced] = useState<{
     inputs: NonNullable<typeof outlineInputs>;
@@ -284,6 +314,7 @@ export default function ModelViewer({
       Vector3.Zero(),
       scene,
     );
+    cameraRef.current = camera;
     camera.attachControl(canvas, true);
     camera.lowerRadiusLimit = span * 0.5;
     camera.upperRadiusLimit = span * 6;
@@ -501,17 +532,23 @@ export default function ModelViewer({
               built.terrain,
               terrainMat,
               terrainColorAt(baseThicknessInches, topY),
+              !outline,
             );
             branded.position.y = plinthTopY;
             terrain.dispose();
             terrainRef.current = branded;
           }
           if (built.plinth) {
-            plinthRef.current = meshFromSolid(scene, "plinth", built.plinth, plinthMat);
+            plinthRef.current = meshFromSolid(scene, "plinth", built.plinth, plinthMat, undefined, !outline);
             const inlayMat = inlayMatRef.current ?? plinthMat;
             inlaysRef.current = built.inlays.map((solid, i) =>
               meshFromSolid(scene, `inlay-${i}`, solid, inlayMat),
             );
+          }
+          // Once per generated model, so adjusting a slider doesn't move the view.
+          if (outline && framedDataRef.current !== data && cameraRef.current) {
+            framedDataRef.current = data;
+            frameCameraOn(cameraRef.current, built, plateFacing ?? 180);
           }
         } catch (err) {
           console.error("[engraving] failed", err);

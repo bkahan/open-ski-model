@@ -33,8 +33,13 @@ const MM_PER_INCH = 25.4;
 /** Fractions of the print's longest side, so the shape looks the same at any size. */
 const BUFFER_FRACTION = 0.03;
 const CLOSING_FRACTION = 0.07;
-const LINE_HALF_WIDTH_IN = 0.005;
+const THINNING_FRACTION = 0.008;
+/** Comfortably wider than WORKING_SIMPLIFY_IN, or a straight line would simplify away. */
+const LINE_HALF_WIDTH_IN = 0.02;
 const SIMPLIFY_IN = 0.004;
+/** Rougher than SIMPLIFY_IN: applied mid-way, where the outline is about to grow anyway. */
+const WORKING_SIMPLIFY_IN = 0.012;
+const BUFFER_ARC_SEGMENTS = 16;
 const ARC_SEGMENTS = 48;
 
 export const OUTLINE_PLINTH_HEIGHT_IN = 4 / MM_PER_INCH;
@@ -71,6 +76,17 @@ function segmentQuad(a: [number, number], b: [number, number], halfWidth: number
   ];
 }
 
+/** Drops points closer together than `spacing`, always keeping both ends. */
+function thinnedLine(line: Array<[number, number]>, spacing: number): Array<[number, number]> {
+  const kept = [line[0]];
+  for (let i = 1; i < line.length - 1; i++) {
+    const [lastX, lastY] = kept[kept.length - 1];
+    if (Math.hypot(line[i][0] - lastX, line[i][1] - lastY) >= spacing) kept.push(line[i]);
+  }
+  if (line.length > 1) kept.push(line[line.length - 1]);
+  return kept;
+}
+
 /** Runs each step on the last result, freeing every intermediate section. */
 export function pipeSections(
   start: CrossSection,
@@ -88,6 +104,11 @@ export function pipeSections(
     current.delete();
     throw err;
   }
+}
+
+function withoutHoles(m: ManifoldToplevel, section: CrossSection): CrossSection {
+  const outers = (section.toPolygons() as Contour[]).filter((ring) => signedArea(ring) > 0);
+  return new m.CrossSection(outers, "NonZero");
 }
 
 function largestOuterRing(section: CrossSection): Contour | null {
@@ -114,8 +135,12 @@ export function buildResortOutline(
   frame: Contour,
   printLongestInches: number,
 ): Contour | null {
+  // Offsetting costs far more than linear in vertex count: Whistler's full
+  // detail took over a minute. The buffer hides anything this thinning loses.
+  const spacing = THINNING_FRACTION * printLongestInches;
   const quads: Contour[] = [];
-  for (const line of lines) {
+  for (const raw of lines) {
+    const line = thinnedLine(raw, spacing);
     for (let i = 0; i + 1 < line.length; i++) {
       if (line[i][0] === line[i + 1][0] && line[i][1] === line[i + 1][1]) continue;
       quads.push(segmentQuad(line[i], line[i + 1], LINE_HALF_WIDTH_IN));
@@ -128,7 +153,11 @@ export function buildResortOutline(
   const frameSection = new m.CrossSection([frame], "NonZero");
   try {
     const merged = pipeSections(new m.CrossSection(quads, "NonZero"), [
-      (s) => s.offset(buffer + closing, "Round", 2, ARC_SEGMENTS),
+      (s) => s.simplify(WORKING_SIMPLIFY_IN),
+      (s) => s.offset(buffer - LINE_HALF_WIDTH_IN, "Round", 2, BUFFER_ARC_SEGMENTS),
+      (s) => withoutHoles(m, s),
+      (s) => s.simplify(WORKING_SIMPLIFY_IN),
+      (s) => s.offset(closing, "Round", 2, ARC_SEGMENTS),
       (s) => s.offset(-closing, "Round", 2, ARC_SEGMENTS),
       (s) => s.intersect(frameSection),
       (s) => s.simplify(SIMPLIFY_IN),

@@ -144,6 +144,23 @@ describe("resortLinesOnPlane", () => {
     );
     expect(lines).toHaveLength(2);
   });
+
+  it("leaves out lines tagged only to another ski area", () => {
+    const resort: ResortData = {
+      runs: [
+        { ...centerRun, areas: ["jay"] },
+        { ...centerRun, id: "2", areas: ["burke"] },
+        { ...centerRun, id: "3", areas: ["burke", "jay"] },
+        { ...centerRun, id: "4", areas: [] },
+      ],
+      lifts: [],
+      bbox,
+      extent: bbox,
+      convention: "north_america",
+    };
+    expect(resortLinesOnPlane({ ...spec(resort), areaId: "jay" })).toHaveLength(3);
+    expect(resortLinesOnPlane(spec(resort))).toHaveLength(4);
+  });
 });
 
 describe("stacked terrain", () => {

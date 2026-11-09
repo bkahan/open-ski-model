@@ -179,6 +179,7 @@ export default function Home() {
   });
   const [shape, setShape] = useState<Shape>("rectangle");
   const [silhouette, setSilhouette] = useState(false);
+  const [areaId, setAreaId] = useState<string | null>(null);
   const [layerCount, setLayerCount] = useState(0);
   const [rotation, setRotation] = useState(0);
   const [gridSize, setGridSize] = useState<number>(DEFAULT_GRID_SIZE);
@@ -217,6 +218,7 @@ export default function Home() {
 
     setShape(sh);
     setSilhouette(sh === "rectangle" && (parsed.silhouette ?? false));
+    setAreaId(parsed.areaId ?? null);
     setLayerCount(parsed.layerCount ?? 0);
     setRotation(rot);
     setSize({
@@ -260,6 +262,7 @@ export default function Home() {
         bbox,
         shape,
         silhouette,
+        areaId,
         layerCount,
         rotation,
         widthInches: size.widthInches,
@@ -275,7 +278,7 @@ export default function Home() {
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [bbox, shape, silhouette, layerCount, rotation, size, gridSize, engraveLabel, engraveBrand, resortSettings, label]);
+  }, [bbox, shape, silhouette, areaId, layerCount, rotation, size, gridSize, engraveLabel, engraveBrand, resortSettings, label]);
 
   /** Fetch runs + lifts for `area`, replacing any in-flight request. */
   const loadResort = useCallback(async (area: Bbox): Promise<ResortData | null> => {
@@ -411,6 +414,7 @@ export default function Home() {
   const handleSearch = (result: SearchResult) => {
     setLabel(result.name);
     setFlyTo(result.center);
+    setAreaId(result.kind === "resort" ? result.id : null);
 
     if (result.kind === "resort") {
       // The index gives the resort's natural viewport: turn the frame to
@@ -463,6 +467,8 @@ export default function Home() {
 
   /** Translate the shape (drag-from-inside the overlay). */
   const handleCenterChange = (newCenter: LngLat) => {
+    // A moved frame is no longer about the resort that was picked.
+    setAreaId(null);
     if (!bbox) return;
     const scale = scaleMPerIn(
       bbox,
@@ -822,6 +828,7 @@ export default function Home() {
             label={snapshot.label}
             resort={resort}
             silhouette={silhouette}
+            areaId={areaId}
             layerCount={layerCount}
             showRuns={resortSettings.showRuns}
             colorScheme={resolvedScheme}

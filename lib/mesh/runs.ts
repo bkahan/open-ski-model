@@ -151,14 +151,19 @@ export function terrainLayersFor(
 /**
  * Every drawn run and lift as a polyline in the model plane, for tracing an
  * outline. Polygon runs are left out: they aren't drawn, and a backcountry
- * zone mapped as one would add a piece of model with nothing on it.
+ * zone mapped as one would add a piece of model with nothing on it. So
+ * are lines tagged only to another ski area: neighbors like Alta and
+ * Snowbird touch, and would otherwise merge into one shape.
  */
 export function resortLinesOnPlane(
-  spec: PlaneSpec & { resort: ResortData },
+  spec: PlaneSpec & { resort: ResortData; areaId?: string | null },
 ): Array<Array<[number, number]>> {
   const { geoToLocal } = modelPlane(spec);
+  const { areaId } = spec;
   const drawn = [...spec.resort.runs.filter((r) => !r.isArea), ...spec.resort.lifts];
-  return drawn.map((line) => line.coords.map(geoToLocal));
+  return drawn
+    .filter((line) => !areaId || !line.areas?.length || line.areas.includes(areaId))
+    .map((line) => line.coords.map(geoToLocal));
 }
 
 export function buildRunRibbons(spec: RunMeshSpec): RibbonGroup[] {

@@ -6,6 +6,7 @@ const base: UrlState = {
   bbox: [-72.52, 44.91, -72.48, 44.95],
   shape: "rectangle",
   silhouette: false,
+  areaId: null,
   layerCount: 0,
   rotation: 0,
   widthInches: 6,
@@ -36,6 +37,11 @@ describe("model height url state", () => {
     for (const bad of ["abc", "0", "2", "17", "999999999", "4.5"]) {
       expect(decodeUrlState(new URLSearchParams(`ln=${bad}`)).layerCount).toBeUndefined();
     }
+  });
+
+  it("round-trips the ski area id", () => {
+    expect(encodeUrlState(base).has("ra")).toBe(false);
+    expect(decodeUrlState(encodeUrlState({ ...base, areaId: "abc123" })).areaId).toBe("abc123");
   });
 
   it("round-trips the resort outline", () => {

@@ -16,6 +16,7 @@ export interface UrlState {
   bbox: Bbox;
   shape: Shape;
   silhouette: boolean;
+  areaId: string | null;
   layerCount: number;
   rotation: number;
   widthInches: number;
@@ -41,6 +42,7 @@ export function encodeUrlState(s: UrlState): URLSearchParams {
   params.set("s", `${trim(s.widthInches)}x${trim(s.heightInches)}`);
   params.set("sh", s.shape);
   if (s.silhouette) params.set("ol", "1");
+  if (s.areaId) params.set("ra", s.areaId);
   if (s.layerCount > 0) params.set("ln", String(s.layerCount));
   if (s.rotation !== 0) params.set("r", trim(s.rotation));
   if (s.aspectLocked) params.set("lk", "1");
@@ -83,6 +85,8 @@ export function decodeUrlState(params: URLSearchParams): Partial<UrlState> {
     out.shape = sh as Shape;
   }
   if (params.get("ol") === "1") out.silhouette = true;
+  const ra = params.get("ra");
+  if (ra) out.areaId = ra;
   const ln = Number(params.get("ln"));
   if (Number.isInteger(ln) && ln >= MIN_LAYER_COUNT && ln <= MAX_LAYER_COUNT) {
     out.layerCount = ln;

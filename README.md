@@ -207,6 +207,7 @@ are fused in by position dedup so the export stays a single solid.
 | `t`     | base thickness, inches                                 |
 | `rh`    | model height, base to peak, in inches                  |
 | `ol`    | `1` to cut the model to the resort's outline           |
+| `ra`    | ski area id, keeps neighbors out of the outline        |
 | `ln`    | stacked finish: number of steps (omitted when smooth)  |
 | `runs`  | `0` to hide ski runs (on by default)                   |
 | `lf`    | `0` to hide lifts (on by default)                      |

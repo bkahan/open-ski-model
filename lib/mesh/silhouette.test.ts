@@ -59,8 +59,8 @@ describe("buildResortOutline", () => {
   it("wraps nearby trails in one ring with a margin", () => {
     const ring = buildResortOutline(m, [trail(-0.4), trail(0.4)], frame, 6)!;
     const box = bounds(ring);
-    expect(box.minX).toBeCloseTo(-0.4 - 0.18 - 0.005, 2);
-    expect(box.maxX).toBeCloseTo(0.4 + 0.18 + 0.005, 2);
+    expect(box.minX).toBeCloseTo(-0.4 - 0.18, 2);
+    expect(box.maxX).toBeCloseTo(0.4 + 0.18, 2);
     const inside = outlineMask(ring, 6, 6, 241, 241);
     expect(inside(0, 0)).toBe(true);
     expect(inside(1.5, 0)).toBe(false);

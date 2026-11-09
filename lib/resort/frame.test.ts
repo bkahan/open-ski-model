@@ -54,13 +54,19 @@ describe("frameAroundResort", () => {
         run([a, b]),
         run([a, far], { isArea: true }),
         run([b, far], { areas: ["burke"] }),
-        run([b, far], { areas: undefined }),
+        run([far, [-72.81, 44.61]], { areas: [] }),
       ]),
       "jay",
       0,
       1,
     )!;
     expect(frame.center[0]).toBeCloseTo(-72.51, 5);
+  });
+
+  it("includes untagged runs that reach the resort, whole", () => {
+    const beyond: LngLat = [-72.5, 44.9];
+    const frame = frameAroundResort(resortOf([run([a, b]), run([a, beyond], { areas: [] })]), "jay", 0, 1)!;
+    expect(frame.center[1]).toBeCloseTo((44.9 + 44.94) / 2, 5);
   });
 
   it("returns null when nothing is tagged", () => {
