@@ -66,7 +66,11 @@ no visible text. Replacing both:
 - "Resort" footprint, the default after picking a resort: the frame stays
   a rectangle on the map and the model is cut to an outline around its
   runs and lifts (buffered 3% of the print, bays closed at 7%, detached
-  clusters and holes dropped). Manifold intersects it, so edges are clean.
+  clusters and holes dropped). Polygon runs don't count: they aren't drawn,
+  and OSM can map a whole backcountry zone as one. Manifold intersects it,
+  so edges are clean.
+- Picking a resort frames it from the runs and lifts tagged to it. The
+  index viewport is used only until those load.
 - With the name on, a 4 mm slab follows the outline with a flat tab on
   the base side carrying the name and rose; the brand goes under the tab.
 

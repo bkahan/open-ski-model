@@ -39,6 +39,8 @@ export interface SkiRun {
   coords: LngLat[];
   /** True when the run is mapped as a polygon. */
   isArea: boolean;
+  /** Ski areas this run is tagged to; many real runs have none. */
+  areas?: string[];
 }
 
 export interface SkiLift {
@@ -47,6 +49,8 @@ export interface SkiLift {
   name?: string;
   type: LiftType;
   coords: LngLat[];
+  /** Ski areas this lift is tagged to. */
+  areas?: string[];
 }
 
 export interface ResortRequest {

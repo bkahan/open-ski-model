@@ -4,7 +4,13 @@ import type { ElevationResponse } from "@/lib/elevation/types";
 import type { ResortData } from "@/lib/resort/types";
 import type { Bbox } from "@/lib/types";
 
-import { buildRunRibbons, resortFrontBearing, terrainLayersFor, type RunMeshSpec } from "./runs";
+import {
+  buildRunRibbons,
+  resortFrontBearing,
+  resortLinesOnPlane,
+  terrainLayersFor,
+  type RunMeshSpec,
+} from "./runs";
 
 // 6" square frame centered on Jay Peak; roughly 1:33,000.
 const bbox: Bbox = [-72.53, 44.91, -72.47, 44.95];
@@ -122,6 +128,21 @@ describe("buildRunRibbons", () => {
       const d = Math.hypot(positions[i], positions[i + 2]);
       expect(d).toBeLessThanOrEqual(r + 0.1);
     }
+  });
+});
+
+describe("resortLinesOnPlane", () => {
+  it("leaves out polygon runs, which aren't drawn", () => {
+    const lines = resortLinesOnPlane(
+      spec({
+        runs: [centerRun, { ...centerRun, id: "zone", isArea: true }],
+        lifts: [{ id: "9", type: "chair_lift", coords: centerRun.coords }],
+        bbox,
+        extent: bbox,
+        convention: "north_america",
+      }),
+    );
+    expect(lines).toHaveLength(2);
   });
 });
 

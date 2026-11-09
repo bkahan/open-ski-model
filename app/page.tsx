@@ -53,6 +53,7 @@ import {
   shapeIsRotatable,
   type Shape,
 } from "@/lib/shape";
+import { frameAroundResort } from "@/lib/resort/frame";
 import {
   DEFAULT_RELIEF_INCHES,
   exaggerationForRelief,
@@ -93,6 +94,8 @@ const MAX_GRID_SIZE = 2048;
 const RESORT_FETCH_SCALE = 1.6;
 const RESORT_SEARCH_MIN_METERS = 8_000;
 const RESORT_FRAME_PADDING = 1.08;
+/** Leaves room for the outline's own margin around the outermost runs. */
+const RESORT_OUTLINE_PADDING = 1.12;
 const RESORT_FRAME_MIN_RUNS = 3;
 const RESORT_FETCH_DEBOUNCE_MS = 700;
 /** Mirrors the server cap in /api/resort. */
@@ -380,6 +383,31 @@ export default function Home() {
     setFlyTo(bboxCenter(framed));
   };
 
+  /** Replaces the index's rough viewport with one around the resort's own lines. */
+  const fitFrameToResort = async (
+    result: SearchResult,
+    initialBbox: Bbox,
+    frameRotation: number,
+    widthInches: number,
+    heightInches: number,
+  ) => {
+    const data = await fetchResort(resortFetchArea(result.bbox));
+    if (bboxRef.current !== initialBbox) return;
+    const frame = frameAroundResort(data, result.id, frameRotation, RESORT_OUTLINE_PADDING);
+    if (!frame) return;
+    setBbox(
+      bboxForShape(
+        frame.center,
+        "rectangle",
+        widthInches,
+        heightInches,
+        frameRotation,
+        frame.sideMeters / Math.min(widthInches, heightInches),
+      ),
+    );
+    setFlyTo(frame.center);
+  };
+
   const handleSearch = (result: SearchResult) => {
     setLabel(result.name);
     setFlyTo(result.center);
@@ -401,7 +429,11 @@ export default function Home() {
       setSize((s) => ({ ...s, heightInches }));
       setRotation(nextRotation);
       const [hW, hH] = shapeAABBHalf("rectangle", widthInches, heightInches, nextRotation);
-      setBbox(snapBboxToAspect(scaleBbox(result.bbox, RESORT_FRAME_PADDING), hW / hH, 0));
+      const viewport = snapBboxToAspect(scaleBbox(result.bbox, RESORT_FRAME_PADDING), hW / hH, 0);
+      setBbox(viewport);
+      fitFrameToResort(result, viewport, nextRotation, widthInches, heightInches).catch((err) =>
+        console.error("[resort-frame]", err),
+      );
       return;
     }
 

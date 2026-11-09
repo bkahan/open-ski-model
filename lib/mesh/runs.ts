@@ -148,12 +148,17 @@ export function terrainLayersFor(
   return { levels: layerLevels(low, high, spec.count), baseY: spec.baseThicknessInches };
 }
 
-/** Every run and lift as a polyline in the model plane, for tracing an outline. */
+/**
+ * Every drawn run and lift as a polyline in the model plane, for tracing an
+ * outline. Polygon runs are left out: they aren't drawn, and a backcountry
+ * zone mapped as one would add a piece of model with nothing on it.
+ */
 export function resortLinesOnPlane(
   spec: PlaneSpec & { resort: ResortData },
 ): Array<Array<[number, number]>> {
   const { geoToLocal } = modelPlane(spec);
-  return [...spec.resort.runs, ...spec.resort.lifts].map((line) => line.coords.map(geoToLocal));
+  const drawn = [...spec.resort.runs.filter((r) => !r.isArea), ...spec.resort.lifts];
+  return drawn.map((line) => line.coords.map(geoToLocal));
 }
 
 export function buildRunRibbons(spec: RunMeshSpec): RibbonGroup[] {
