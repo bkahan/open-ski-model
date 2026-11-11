@@ -19,8 +19,8 @@ colored by difficulty and lifts as stripes.
   public instances rejected under load ("all query workers are busy").
 - `POST /api/resort` assembles runs and lifts for a bbox from the cells;
   `GET /api/resort/search` ranks ski areas by name.
-- Runs drawn on the 2D map and draped on the 3D terrain as ribbons, one
-  mesh per color. Lifts toggleable. Minimum run width (default 1.2 mm)
+- Runs drawn on the 2D map and, on the 3D terrain, set in as flush color
+  bodies, one per color (first shipped as draped ribbons). Lifts toggleable. Minimum run width (default 1.2 mm)
   widens anything narrower.
 - Color scheme auto-picked by hemisphere (N. America green/blue/black,
   Europe blue/red/black), overridable.

@@ -115,10 +115,10 @@ export function resortInlayGroups(
       });
     }
   }
-  return COLOR_PRIORITY.filter((key) => byColor.has(key)).map((key) => ({
-    key,
-    paths: byColor.get(key)!,
-  }));
+  return COLOR_PRIORITY.flatMap((key) => {
+    const paths = byColor.get(key);
+    return paths ? [{ key, paths }] : [];
+  });
 }
 
 /**

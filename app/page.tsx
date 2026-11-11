@@ -701,7 +701,6 @@ export default function Home() {
 
         <DensityControls gridSize={gridSize} onChange={setGridSize} />
 
-
         <EngravingControls
           label={engraveLabel}
           brand={engraveBrand}

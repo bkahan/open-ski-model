@@ -1,7 +1,7 @@
 // Turns the built solids into one body per filament. One AMS gives four
 // filaments: white terrain and three trail colors, with lifts and text in
 // black. A second AMS keeps every color separate and adds forest green
-// to the lower steps.
+// to the terrain below the treeline.
 
 import type { Manifold, ManifoldToplevel } from "manifold-3d";
 

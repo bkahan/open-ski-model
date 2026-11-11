@@ -80,7 +80,7 @@ box, get a watertight `.stl` you can hand to your slicer.
   [OpenSkiData](https://openskidata.org) (OpenSkiMap's processed OSM
   data), rebuilt weekly by a GitHub Action into 1° cells on the `data`
   branch and served through jsDelivr, so no query server sits in the
-  request path. They're drawn on the map and draped on the 3D terrain,
+  request path. They're drawn on the map and set into the 3D terrain,
   colored by difficulty. The search box lists ski resorts from the same
   dataset; picking one turns and fits the frame to the resort's natural
   viewport. Trail colors follow the convention the data was tagged under
