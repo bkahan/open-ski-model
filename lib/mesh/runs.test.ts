@@ -4,7 +4,15 @@ import type { ElevationResponse } from "@/lib/elevation/types";
 import type { ResortData } from "@/lib/resort/types";
 import type { Bbox } from "@/lib/types";
 
-import { buildRunRibbons, resortFrontBearing, type RunMeshSpec } from "./runs";
+import { grooveDepthFor } from "./layers";
+import {
+  buildRunRibbons,
+  resortFrontBearing,
+  resortGrooveGroups,
+  resortLinesOnPlane,
+  terrainLayersFor,
+  type RunMeshSpec,
+} from "./runs";
 
 // 6" square frame centered on Jay Peak; roughly 1:33,000.
 const bbox: Bbox = [-72.53, 44.91, -72.47, 44.95];
@@ -121,6 +129,107 @@ describe("buildRunRibbons", () => {
     for (let i = 0; i < positions.length; i += 3) {
       const d = Math.hypot(positions[i], positions[i + 2]);
       expect(d).toBeLessThanOrEqual(r + 0.1);
+    }
+  });
+});
+
+describe("resortLinesOnPlane", () => {
+  it("leaves out polygon runs, which aren't drawn", () => {
+    const lines = resortLinesOnPlane(
+      spec({
+        runs: [centerRun, { ...centerRun, id: "zone", isArea: true }],
+        lifts: [{ id: "9", type: "chair_lift", coords: centerRun.coords }],
+        bbox,
+        extent: bbox,
+        convention: "north_america",
+      }),
+    );
+    expect(lines).toHaveLength(2);
+  });
+
+  it("leaves out lines tagged only to another ski area", () => {
+    const resort: ResortData = {
+      runs: [
+        { ...centerRun, areas: ["jay"] },
+        { ...centerRun, id: "2", areas: ["burke"] },
+        { ...centerRun, id: "3", areas: ["burke", "jay"] },
+        { ...centerRun, id: "4", areas: [] },
+      ],
+      lifts: [],
+      bbox,
+      extent: bbox,
+      convention: "north_america",
+    };
+    expect(resortLinesOnPlane({ ...spec(resort), areaId: "jay" })).toHaveLength(3);
+    expect(resortLinesOnPlane(spec(resort))).toHaveLength(4);
+  });
+});
+
+describe("stacked terrain", () => {
+  const size = 64;
+  const slope: ElevationResponse = {
+    heights: Array.from({ length: size * size }, (_, k) => 500 + (k % size) * 12),
+    width: size,
+    height: size,
+    min: 500,
+    max: 500 + (size - 1) * 12,
+    source: "terrarium",
+    zoom: 12,
+  };
+  const plane = {
+    bbox,
+    data: slope,
+    shape: "rectangle" as const,
+    widthInches: 6,
+    heightInches: 6,
+    rotation: 0,
+    baseThicknessInches: 0.25,
+    verticalExaggeration: 2,
+  };
+  const resort: ResortData = {
+    runs: [centerRun],
+    lifts: [],
+    bbox,
+    extent: bbox,
+    convention: "north_america",
+  };
+
+  it("measures the levels over the part of the terrain that is kept", () => {
+    const whole = terrainLayersFor({ ...plane, count: 6 })!;
+    const eastOnly = terrainLayersFor({ ...plane, count: 6, insideOutline: (x) => x > 0 })!;
+    expect(whole.levels).toHaveLength(7);
+    expect(whole.levels[0]).toBeCloseTo(0.25, 6);
+    expect(eastOnly.levels[0]).toBeGreaterThan(whole.levels[0]);
+    expect(whole.baseY).toBe(0.25);
+  });
+
+  it("returns null when nothing is kept", () => {
+    expect(terrainLayersFor({ ...plane, count: 6, insideOutline: () => false })).toBeNull();
+  });
+
+  it("groups grooves by color, highest priority first, at printed widths", () => {
+    const withLift: ResortData = {
+      ...resort,
+      lifts: [{ id: "9", type: "chair_lift", coords: centerRun.coords }],
+    };
+    const groups = resortGrooveGroups({ ...plane, resort: withLift, scheme: "na", showLifts: true, minWidthMm: 1.2 });
+    expect(groups.map((g) => g.key)).toEqual(["lift", "green"]);
+    expect(groups[0].paths[0].halfWidth).toBeCloseTo(1.2 / 25.4 / 2, 6);
+    expect(resortGrooveGroups({ ...plane, resort: withLift, scheme: "na", showLifts: false, minWidthMm: 1.2 }).map((g) => g.key)).toEqual(["green"]);
+  });
+
+  it("keeps ribbons on the flat tops, with no quad spanning a step", () => {
+    const layerLevels = terrainLayersFor({ ...plane, count: 6 })!.levels;
+    const [green] = buildRunRibbons(spec(resort, { data: slope, layerLevels }));
+    const positions = green.vertexData.positions as Float32Array;
+    const indices = green.vertexData.indices as Uint32Array;
+    const sink = grooveDepthFor(layerLevels);
+    const onATop = (y: number) => layerLevels.some((l) => Math.abs(l - sink + 0.01 - y) < 1e-4);
+    for (let i = 1; i < positions.length; i += 3) expect(onATop(positions[i])).toBe(true);
+    for (let t = 0; t < indices.length; t += 3) {
+      const a = positions[indices[t] * 3 + 1];
+      expect(positions[indices[t + 1] * 3 + 1]).toBeCloseTo(a, 5);
+      expect(positions[indices[t + 2] * 3 + 1]).toBeCloseTo(a, 5);
     }
   });
 });

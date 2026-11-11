@@ -14,7 +14,15 @@ import { VertexData } from "@babylonjs/core";
 
 import { bboxCenter, bboxWidthMeters, metersPerDegLng } from "@/lib/bbox";
 import type { ElevationResponse } from "@/lib/elevation/types";
-import { liftColor, runColor, type ColorScheme, type Rgb } from "@/lib/resort/colors";
+import { LIFT_COLOR, liftColor, runColor, type ColorScheme, type Rgb } from "@/lib/resort/colors";
+import {
+  type GrooveGroup,
+  type GroovePath,
+  grooveDepthFor,
+  layerLevels,
+  layerTopAt,
+  type TerrainLayers,
+} from "@/lib/mesh/layers";
 import { frontBearing } from "@/lib/resort/front";
 import type { ResortData } from "@/lib/resort/types";
 import { pointInShape, shapeAABBHalf, type Shape } from "@/lib/shape";
@@ -44,6 +52,10 @@ export interface RunMeshSpec {
   minWidthMm: number;
   /** How far above the terrain surface the ribbon floats, in inches. */
   lift: number;
+  /** Extra footprint test, for a model cut to something other than its shape. */
+  insideOutline?: (x: number, z: number) => boolean;
+  /** Step boundaries, when the terrain is stacked; ribbons sit on the flat tops. */
+  layerLevels?: number[];
 }
 
 export interface RibbonGroup {
@@ -111,6 +123,101 @@ export function resortFrontBearing(spec: PlaneSpec & { resort: ResortData }): nu
   });
 }
 
+/**
+ * Step boundaries for this model's stacked finish, measured over the part
+ * of the terrain that survives the cut. Null when none of it does.
+ */
+export function terrainLayersFor(
+  spec: PlaneSpec & {
+    baseThicknessInches: number;
+    verticalExaggeration: number;
+    count: number;
+    insideOutline?: (x: number, z: number) => boolean;
+  },
+): TerrainLayers | null {
+  const { data, shape, widthInches, heightInches, rotation, insideOutline } = spec;
+  const { gridW, gridH, inPerMeter } = modelPlane(spec);
+  const yPerMeter = inPerMeter * spec.verticalExaggeration;
+  let low = Infinity;
+  let high = -Infinity;
+  for (let j = 0; j < data.height; j++) {
+    const z = gridH / 2 - (j * gridH) / (data.height - 1);
+    for (let i = 0; i < data.width; i++) {
+      const x = -gridW / 2 + (i * gridW) / (data.width - 1);
+      if (!pointInShape(shape, x, z, widthInches, heightInches, rotation)) continue;
+      if (insideOutline && !insideOutline(x, z)) continue;
+      const y = spec.baseThicknessInches + (data.heights[j * data.width + i] - data.min) * yPerMeter;
+      if (y < low) low = y;
+      if (y > high) high = y;
+    }
+  }
+  if (!Number.isFinite(low) || high <= low) return null;
+  return { levels: layerLevels(low, high, spec.count), baseY: spec.baseThicknessInches };
+}
+
+/** Where lines cross, the higher one wins: lifts over black over blue over green. */
+const GROOVE_COLOR_PRIORITY = ["lift", "black", "red", "orange", "blue", "green", "gray"];
+
+/** Runs and lifts by color, to cut into stacked terrain at their drawn widths. */
+export function resortGrooveGroups(
+  spec: PlaneSpec & {
+    resort: ResortData;
+    areaId?: string | null;
+    scheme: ColorScheme;
+    showLifts: boolean;
+    minWidthMm: number;
+  },
+): GrooveGroup[] {
+  const { geoToLocal, inPerMeter } = modelPlane(spec);
+  const { resort, areaId, scheme, showLifts, minWidthMm } = spec;
+  const minWidthIn = minWidthMm / MM_PER_INCH;
+  const halfWidth = (meters: number) => Math.max(minWidthIn, meters * inPerMeter) / 2;
+  const belongs = (line: { areas?: string[] }) =>
+    !areaId || !line.areas?.length || line.areas.includes(areaId);
+  const byColor = new Map<string, GroovePath[]>();
+  const add = (color: string, path: GroovePath) => {
+    byColor.set(color, [...(byColor.get(color) ?? []), path]);
+  };
+  for (const run of resort.runs) {
+    if (run.isArea || !belongs(run)) continue;
+    add(runColor(run.difficulty, scheme).name, {
+      points: run.coords.map(geoToLocal),
+      halfWidth: halfWidth(DEFAULT_RUN_WIDTH_M),
+    });
+  }
+  if (showLifts) {
+    for (const lift of resort.lifts) {
+      if (!belongs(lift)) continue;
+      add(LIFT_COLOR.name, {
+        points: lift.coords.map(geoToLocal),
+        halfWidth: halfWidth(DEFAULT_LIFT_WIDTH_M),
+      });
+    }
+  }
+  return GROOVE_COLOR_PRIORITY.filter((key) => byColor.has(key)).map((key) => ({
+    key,
+    paths: byColor.get(key)!,
+  }));
+}
+
+/**
+ * Every drawn run and lift as a polyline in the model plane, for tracing an
+ * outline. Polygon runs are left out: they aren't drawn, and a backcountry
+ * zone mapped as one would add a piece of model with nothing on it. So
+ * are lines tagged only to another ski area: neighbors like Alta and
+ * Snowbird touch, and would otherwise merge into one shape.
+ */
+export function resortLinesOnPlane(
+  spec: PlaneSpec & { resort: ResortData; areaId?: string | null },
+): Array<Array<[number, number]>> {
+  const { geoToLocal } = modelPlane(spec);
+  const { areaId } = spec;
+  const drawn = [...spec.resort.runs.filter((r) => !r.isArea), ...spec.resort.lifts];
+  return drawn
+    .filter((line) => !areaId || !line.areas?.length || line.areas.includes(areaId))
+    .map((line) => line.coords.map(geoToLocal));
+}
+
 export function buildRunRibbons(spec: RunMeshSpec): RibbonGroup[] {
   const {
     data,
@@ -125,12 +232,19 @@ export function buildRunRibbons(spec: RunMeshSpec): RibbonGroup[] {
     showLifts,
     minWidthMm,
     lift,
+    insideOutline,
+    layerLevels: levels,
   } = spec;
 
   const { geoToLocal, gridW, gridH, inPerMeter } = modelPlane(spec);
-  const sampler = heightSampler(data, gridW, gridH, baseThicknessInches, inPerMeter * verticalExaggeration);
+  const surface = heightSampler(data, gridW, gridH, baseThicknessInches, inPerMeter * verticalExaggeration);
+  // On stacked terrain the ribbons color the floor of the cut grooves.
+  const sampler: HeightSampler = levels
+    ? (x, z) => layerTopAt(levels, surface(x, z)) - grooveDepthFor(levels)
+    : surface;
   const inside = (x: number, z: number) =>
-    pointInShape(shape, x, z, widthInches, heightInches, rotation);
+    pointInShape(shape, x, z, widthInches, heightInches, rotation) &&
+    (insideOutline?.(x, z) ?? true);
 
   const cellIn = gridW / (data.width - 1);
   const minWidthIn = minWidthMm / MM_PER_INCH;
@@ -154,7 +268,7 @@ export function buildRunRibbons(spec: RunMeshSpec): RibbonGroup[] {
     const color = runColor(run.difficulty, scheme);
     const g = groupFor(color.name, color.rgb);
     const path = run.coords.map(geoToLocal);
-    if (appendRibbon(g, path, runWidth, cellIn, sampler, inside, lift)) g.count++;
+    if (appendRibbon(g, path, runWidth, cellIn, sampler, inside, lift, Boolean(levels))) g.count++;
   }
 
   if (showLifts) {
@@ -165,7 +279,7 @@ export function buildRunRibbons(spec: RunMeshSpec): RibbonGroup[] {
       const path = l.coords.map(geoToLocal);
       // Lifts fly over terrain, so sample straight along the line rather
       // than hugging every dip, and sit a little higher than runs.
-      if (appendRibbon(g, path, liftWidth, cellIn, sampler, inside, lift * 2)) g.count++;
+      if (appendRibbon(g, path, liftWidth, cellIn, sampler, inside, lift * 2, Boolean(levels))) g.count++;
     }
   }
 
@@ -231,6 +345,7 @@ function appendRibbon(
   sample: HeightSampler,
   inside: (x: number, z: number) => boolean,
   lift: number,
+  flatSteps: boolean,
 ): boolean {
   const dense = densify(path, step);
   const half = width / 2;
@@ -241,6 +356,7 @@ function appendRibbon(
   // whole cross-section must be inside, or the ribbon would overhang
   // the side wall (or removed cells, on circles and hexes).
   let strip: Array<[number, number]> = [];
+  let stripTop = NaN;
   const flush = () => {
     if (strip.length >= 2) {
       emitStrip(g, strip, half, sample, lift);
@@ -255,8 +371,20 @@ function appendRibbon(
       inside(p[0], p[1]) &&
       inside(p[0] + nx * half, p[1] + nz * half) &&
       inside(p[0] - nx * half, p[1] - nz * half);
-    if (fits) strip.push(p);
-    else flush();
+    // On stacked terrain a ribbon only lies on one flat top at a time. A
+    // cross-section straddling a step would be a spike down its wall.
+    const top = sample(p[0], p[1]);
+    const onOneStep =
+      !flatSteps ||
+      (sample(p[0] + nx * half, p[1] + nz * half) === top &&
+        sample(p[0] - nx * half, p[1] - nz * half) === top);
+    if (!fits || !onOneStep) {
+      flush();
+      continue;
+    }
+    if (flatSteps && top !== stripTop) flush();
+    stripTop = top;
+    strip.push(p);
   }
   flush();
   return emitted;

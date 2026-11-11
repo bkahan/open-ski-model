@@ -1,14 +1,17 @@
 "use client";
 
-// Shape selector: picks the geometric footprint of the 3D model. Selecting
-// a non-rectangle shape locks the bbox aspect so the inscribed figure
-// fills the frame.
+// Shape selector: picks the footprint of the 3D model. Selecting a
+// non-rectangle shape locks the bbox aspect so the inscribed figure fills
+// the frame. "Resort" keeps a rectangular frame on the map and cuts the
+// model to the shape of the ski area inside it.
 
 import type { Shape } from "@/lib/shape";
 
 interface Props {
   shape: Shape;
+  silhouette: boolean;
   onChange: (next: Shape) => void;
+  onSilhouette: () => void;
 }
 
 const OPTIONS: Array<{ value: Shape; label: string; icon: JSX.Element }> = [
@@ -41,27 +44,38 @@ const OPTIONS: Array<{ value: Shape; label: string; icon: JSX.Element }> = [
   },
 ];
 
-export default function ShapeControls({ shape, onChange }: Props) {
+const BUTTON_BASE =
+  "flex flex-col items-center justify-center gap-1 rounded-md py-2 px-1 text-[10px] uppercase tracking-wide border transition ";
+const BUTTON_ACTIVE = "border-amber-400 bg-amber-400/10 text-amber-200";
+const BUTTON_IDLE = "border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200";
+
+export default function ShapeControls({ shape, silhouette, onChange, onSilhouette }: Props) {
   return (
     <fieldset className="space-y-2">
       <legend className="text-slate-400 uppercase tracking-wider text-xs mb-1">
         Shape
       </legend>
-      <div className="grid grid-cols-3 gap-1.5">
+      <div className="grid grid-cols-4 gap-1.5">
+        <button
+          type="button"
+          onClick={onSilhouette}
+          aria-pressed={silhouette}
+          className={BUTTON_BASE + (silhouette ? BUTTON_ACTIVE : BUTTON_IDLE)}
+        >
+          <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path d="M4 15c-1-5 3-6 5-9 2-2 5 0 6 2 2 3 6 3 5 8-1 4-5 2-8 3-3 0-7 1-8-4z" />
+          </svg>
+          <span>Resort</span>
+        </button>
         {OPTIONS.map((opt) => {
-          const active = opt.value === shape;
+          const active = !silhouette && opt.value === shape;
           return (
             <button
               key={opt.value}
               type="button"
               onClick={() => onChange(opt.value)}
               aria-pressed={active}
-              className={
-                "flex flex-col items-center justify-center gap-1 rounded-md py-2 px-1 text-[10px] uppercase tracking-wide border transition " +
-                (active
-                  ? "border-amber-400 bg-amber-400/10 text-amber-200"
-                  : "border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200")
-              }
+              className={BUTTON_BASE + (active ? BUTTON_ACTIVE : BUTTON_IDLE)}
             >
               {opt.icon}
               <span>{opt.label}</span>

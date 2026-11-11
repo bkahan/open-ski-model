@@ -1,4 +1,4 @@
-// Name plate: the place name and a north arrow set into one chamfer of
+// Name plate: the place name and a compass rose set into one chamfer of
 // the plinth, the one on the resort's base side when that is known and
 // otherwise the bottom edge of the frame. Each glyph is placed on its
 // own, so on a circular plinth the text follows the cone instead of
@@ -17,7 +17,8 @@
 //
 // Font size comes from the chamfer: cap height is a fraction of the
 // slope length, clamped to what a nozzle can resolve, then shrunk until
-// the name and arrow fit the face.
+// the name and rose fit the face. A name that still won't fit loses its
+// generic words before it loses letters.
 
 import type { Manifold, ManifoldToplevel } from "manifold-3d";
 import type * as opentype from "opentype.js";
@@ -25,7 +26,7 @@ import type * as opentype from "opentype.js";
 import { normalizeDeg } from "@/lib/angle";
 import type { Shape } from "@/lib/shape";
 
-import { compassContour, rotateContour } from "./compass";
+import { compassRoseContours } from "./compass";
 import { extrudeContours } from "./manifold";
 import {
   BEVEL_DEG,
@@ -48,11 +49,13 @@ const MIN_CAP_IN = 3 / MM_PER_INCH;
 const MAX_CAP_IN = 9 / MM_PER_INCH;
 /** Pocket depth and how far the cutter starts above the face. */
 export const POCKET_DEPTH_IN = 1 / MM_PER_INCH;
-const OVERCUT_IN = 0.02;
-/** Gaps: face ends to content, and between name and arrow, in caps. */
-const END_MARGIN_CAPS = 0.8;
-const ARROW_GAP_CAPS = 0.6;
-const ARROW_SIZE_CAPS = 1.25;
+export const OVERCUT_IN = 0.02;
+/** Gaps: face ends to content, and between name and rose, in caps. */
+export const END_MARGIN_CAPS = 0.8;
+export const ROSE_GAP_CAPS = 0.6;
+/** Keeps the rose's pocket from breaking through the plinth's underside. */
+const ROSE_BOTTOM_EXTRA_IN = 0.3 / MM_PER_INCH;
+const ROSE_TOP_CLEAR_IN = 0.5 / MM_PER_INCH;
 /** On a circle, how much of the cone the plate may wrap around. */
 const MAX_ARC_DEG = 110;
 
@@ -90,6 +93,8 @@ interface Face {
   curved: boolean;
   /** Spin about y, in shapeOutline's degrees, from the unrotated south face to this one. */
   turn: number;
+  /** Extra spin that puts the rose on its own face; omitted when it shares this one. */
+  roseFaceTurn?: number;
 }
 
 /**
@@ -143,11 +148,14 @@ function plateFace(spec: NameplateSpec, rim: number): Face {
     }
     case "hexagon":
       // Flat-top hexagon: every side is R = W/2 long, H/2 from center.
+      // That is too short to share, so the rose takes the next face to
+      // the reader's right and the name keeps this one.
       return {
         topRadius: heightInches / 2,
         usable: widthInches / 2,
         curved: false,
         turn,
+        roseFaceTurn: 60,
       };
     case "circle": {
       const midRadius = widthInches / 2 + rim / 2;
@@ -161,43 +169,91 @@ function plateFace(spec: NameplateSpec, rim: number): Face {
   }
 }
 
-/** Pick the cap height and, if needed, shorten the label so the plate fits. */
+/** Slope distance the rose must stay above the chamfer's bottom edge. */
+function roseBottomClearInches(): number {
+  return POCKET_DEPTH_IN / Math.tan((BEVEL_DEG * Math.PI) / 180) + ROSE_BOTTOM_EXTRA_IN;
+}
+
+/** The rose is as big as the chamfer allows, whatever the model size. */
+export function roseDiameterInches(rimInches = RIM_IN): number {
+  return chamferSlopeInches(rimInches) - roseBottomClearInches() - ROSE_TOP_CLEAR_IN;
+}
+
+/** The label, then progressively plainer forms of it, longest first. */
+function nameForms(label: string): string[] {
+  const beforeComma = label.split(",")[0].trim();
+  const withoutGeneric = beforeComma.replace(/\s+(ski\s+)?(resort|area)$/i, "");
+  return [...new Set([label, beforeComma, withoutGeneric])].filter(Boolean);
+}
+
+function shortenByOneLetter(text: string): string {
+  const trimmed = text.replace(/…$/, "").slice(0, -1).trimEnd();
+  return trimmed ? trimmed + "…" : "";
+}
+
+export interface PlateContent {
+  label: string;
+  compass: boolean;
+  /** Length available along the face. */
+  usable: number;
+  /** Height of the face, which sets the largest cap height. */
+  slope: number;
+  roseDiameter: number;
+  /** Whether the rose takes room on the same face as the name. */
+  roseShares: boolean;
+}
+
+/** Pick the cap height and, if needed, a shorter name so the content fits. */
+export function fitPlateContent(
+  font: opentype.Font,
+  content: PlateContent,
+): NameplateLayout | null {
+  const { label, usable, slope, roseDiameter } = content;
+  const compass = content.compass && roseDiameter <= usable;
+  if (!label && !compass) return null;
+  const roseShares = compass && content.roseShares;
+
+  const largestCap = Math.min(MAX_CAP_IN, Math.max(MIN_CAP_IN, CAP_FRACTION * slope));
+  // Everything but the rose scales with the cap height, so the largest
+  // cap that fits is solved for directly. Comparing widths after scaling
+  // would let rounding error reject a name that fits exactly.
+  const capFor = (text: string) => {
+    const unitWidth =
+      (text ? measureTextWidth(font, text, fontSizeForCapHeight(font, 1)) : 0) +
+      (text && roseShares ? ROSE_GAP_CAPS : 0) +
+      2 * END_MARGIN_CAPS;
+    return Math.min(largestCap, (usable - (roseShares ? roseDiameter : 0)) / unitWidth);
+  };
+
+  const forms = nameForms(label);
+  const fitting = forms.find((form) => capFor(form) >= MIN_CAP_IN);
+  if (fitting) return { capInches: capFor(fitting), text: fitting, compass };
+
+  let text = forms.at(-1) ?? "";
+  while (text && capFor(text) < MIN_CAP_IN) text = shortenByOneLetter(text);
+  if (!text && !compass) return null;
+  return { capInches: text ? MIN_CAP_IN : largestCap, text, compass };
+}
+
+/** Fit the name and rose to the plinth face they will sit on. */
 export function fitNameplate(
   font: opentype.Font,
   spec: NameplateSpec,
 ): NameplateLayout | null {
   const rim = spec.rimInches ?? RIM_IN;
   const face = plateFace(spec, rim);
-  const label = spec.label.trim();
-  if (!label && !spec.compass) return null;
-
-  const needed = (cap: number, text: string, compass: boolean) =>
-    (text ? measureTextWidth(font, text, fontSizeForCapHeight(font, cap)) : 0) +
-    (compass ? ARROW_SIZE_CAPS * cap : 0) +
-    (text && compass ? ARROW_GAP_CAPS * cap : 0) +
-    2 * END_MARGIN_CAPS * cap;
-
-  let cap = Math.min(
-    MAX_CAP_IN,
-    Math.max(MIN_CAP_IN, CAP_FRACTION * chamferSlopeInches(rim)),
-  );
-  if (needed(cap, label, spec.compass) > face.usable) {
-    // Shrink proportionally, then clamp to the printable floor.
-    const widthAtCap = needed(cap, label, spec.compass);
-    cap = Math.max(MIN_CAP_IN, cap * (face.usable / widthAtCap));
-  }
-
-  let text = label;
-  while (text && needed(cap, text, spec.compass) > face.usable) {
-    const trimmed = text.replace(/…$/, "").slice(0, -1).trimEnd();
-    text = trimmed ? trimmed + "…" : "";
-  }
-  if (!text && !spec.compass) return null;
-  return { capInches: cap, text, compass: spec.compass };
+  return fitPlateContent(font, {
+    label: spec.label.trim(),
+    compass: spec.compass,
+    usable: face.usable,
+    slope: chamferSlopeInches(rim),
+    roseDiameter: roseDiameterInches(rim),
+    roseShares: face.roseFaceTurn === undefined,
+  });
 }
 
 /**
- * Pocket solids for the plate (one per glyph, plus the arrow), in model
+ * Pocket solids for the plate (one per glyph, plus the rose), in model
  * space and ready to be subtracted from the plinth. Returns [] when
  * nothing fits.
  */
@@ -220,14 +276,15 @@ export function buildNameplateSolids(
   const textWidth = layout.text
     ? measureTextWidth(font, layout.text, fontSize)
     : 0;
-  const arrowSize = layout.compass ? ARROW_SIZE_CAPS * cap : 0;
-  const gap = layout.text && layout.compass ? ARROW_GAP_CAPS * cap : 0;
-  const total = textWidth + gap + arrowSize;
+  const roseDiameter = layout.compass ? roseDiameterInches(rim) : 0;
+  const roseShares = layout.compass && face.roseFaceTurn === undefined;
+  const gap = layout.text && roseShares ? ROSE_GAP_CAPS * cap : 0;
+  const total = textWidth + gap + (roseShares ? roseDiameter : 0);
   const startX = -total / 2;
 
-  // Text and the arrow each have an x position along the face; glyph
+  // Text and the rose each have an x position along the face; glyph
   // contours are built around their own center, then placed.
-  const items: Array<{ contours: Contour[]; x: number }> = [];
+  const items: Array<{ contours: Contour[]; x: number; extraTurn: number }> = [];
   if (layout.text) {
     for (const g of layoutGlyphs(font, layout.text, fontSize)) {
       items.push({
@@ -235,11 +292,16 @@ export function buildNameplateSolids(
           c.map(([x, y]) => [x - g.centerX, y - cap / 2]),
         ),
         x: startX + g.centerX,
+        extraTurn: 0,
       });
     }
   }
   if (layout.compass) {
-    items.push({ contours: [], x: startX + textWidth + gap + arrowSize / 2 });
+    items.push(
+      roseShares
+        ? { contours: [], x: startX + textWidth + gap + roseDiameter / 2, extraTurn: 0 }
+        : { contours: [], x: 0, extraTurn: face.roseFaceTurn ?? 0 },
+    );
   }
 
   const depth = POCKET_DEPTH_IN + OVERCUT_IN;
@@ -254,14 +316,18 @@ export function buildNameplateSolids(
       const angleDeg = face.curved ? (item.x / midRadius) * (180 / Math.PI) : 0;
       const alongX = face.curved ? 0 : item.x;
       // Everything that turns the south face into this item's spot.
-      const spin = angleDeg + face.turn + spec.rotation;
+      const spin = angleDeg + face.turn + item.extraTurn + spec.rotation;
 
       let contours = item.contours;
       if (contours.length === 0) {
-        // The arrow: point it at true north. In face space "up" is toward
-        // the model center, which is north only before the spin, so the
-        // arrow is turned back by the same amount.
-        contours = [rotateContour(compassContour(arrowSize), -spin)];
+        // The rose: north at true north. In face space "up" is toward the
+        // model center, which is north only before the spin, so the rose
+        // is turned back by the same amount. It sits a little above the
+        // middle of the slope because the bottom edge needs more room.
+        const lift = (roseBottomClearInches() - ROSE_TOP_CLEAR_IN) / 2;
+        contours = compassRoseContours(m, font, roseDiameter, -spin).map((c) =>
+          c.map(([x, y]) => [x, y + lift]),
+        );
       }
 
       const steps: Manifold[] = [];

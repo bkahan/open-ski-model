@@ -3,9 +3,10 @@
 // you can hand-edit a URL if you really want to.
 //
 // Examples:
-//   /?b=-72.520,44.910,-72.480,44.950&s=6x6&t=0.25&v=2&label=Jay%20Peak
-//   /?b=-122.97,50.10,-122.91,50.14&s=8x6&t=0.25&v=2.5&label=Whistler
+//   /?b=-72.520,44.910,-72.480,44.950&s=6x6&t=0.25&rh=1.25&label=Jay%20Peak
+//   /?b=-122.97,50.10,-122.91,50.14&s=8x6&t=0.25&rh=2&label=Whistler
 
+import { MAX_LAYER_COUNT, MIN_LAYER_COUNT } from "@/lib/mesh/layers";
 import { isColorSchemeSetting, type ColorSchemeSetting } from "@/lib/resort/colors";
 import { DEFAULT_RESORT_SETTINGS } from "@/lib/resort/settings";
 import type { Shape } from "@/lib/shape";
@@ -14,11 +15,14 @@ import type { Bbox } from "@/lib/types";
 export interface UrlState {
   bbox: Bbox;
   shape: Shape;
+  silhouette: boolean;
+  areaId: string | null;
+  layerCount: number;
   rotation: number;
   widthInches: number;
   heightInches: number;
   baseThicknessInches: number;
-  verticalExaggeration: number;
+  reliefInches: number;
   aspectLocked: boolean;
   gridSize: number;
   engraveLabel: boolean;
@@ -37,6 +41,9 @@ export function encodeUrlState(s: UrlState): URLSearchParams {
   params.set("b", s.bbox.map((v) => v.toFixed(5)).join(","));
   params.set("s", `${trim(s.widthInches)}x${trim(s.heightInches)}`);
   params.set("sh", s.shape);
+  if (s.silhouette) params.set("ol", "1");
+  if (s.areaId) params.set("ra", s.areaId);
+  if (s.layerCount > 0) params.set("ln", String(s.layerCount));
   if (s.rotation !== 0) params.set("r", trim(s.rotation));
   if (s.aspectLocked) params.set("lk", "1");
   if (s.gridSize !== 256) params.set("g", String(Math.round(s.gridSize)));
@@ -50,7 +57,7 @@ export function encodeUrlState(s: UrlState): URLSearchParams {
   }
   if (s.colorScheme !== "auto") params.set("cs", s.colorScheme);
   params.set("t", trim(s.baseThicknessInches));
-  params.set("v", trim(s.verticalExaggeration));
+  params.set("rh", trim(s.reliefInches));
   if (s.label) params.set("label", s.label);
   return params;
 }
@@ -77,6 +84,13 @@ export function decodeUrlState(params: URLSearchParams): Partial<UrlState> {
   if (sh && (SHAPES as string[]).includes(sh)) {
     out.shape = sh as Shape;
   }
+  if (params.get("ol") === "1") out.silhouette = true;
+  const ra = params.get("ra");
+  if (ra) out.areaId = ra;
+  const ln = Number(params.get("ln"));
+  if (Number.isInteger(ln) && ln >= MIN_LAYER_COUNT && ln <= MAX_LAYER_COUNT) {
+    out.layerCount = ln;
+  }
   const r = params.get("r");
   if (r && Number.isFinite(Number(r))) out.rotation = Number(r);
   if (params.get("lk") === "1") out.aspectLocked = true;
@@ -94,8 +108,8 @@ export function decodeUrlState(params: URLSearchParams): Partial<UrlState> {
   if (cs && isColorSchemeSetting(cs)) out.colorScheme = cs;
   const t = params.get("t");
   if (t && Number.isFinite(Number(t))) out.baseThicknessInches = Number(t);
-  const v = params.get("v");
-  if (v && Number.isFinite(Number(v))) out.verticalExaggeration = Number(v);
+  const rh = params.get("rh");
+  if (rh && Number.isFinite(Number(rh)) && Number(rh) > 0) out.reliefInches = Number(rh);
   const label = params.get("label");
   if (label) out.label = label;
 

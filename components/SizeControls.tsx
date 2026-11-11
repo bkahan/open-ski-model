@@ -3,8 +3,11 @@
 // Print and coverage controls.
 //
 // Mental model:
-//   - "Print size" is the model's physical dimensions in inches.
+//   - "Print size" is the model's physical dimensions in inches. It stays
+//     put while the frame is dragged on the map.
 //   - "Real-world coverage" is the shape's footprint on the ground in km.
+//   - "Model height" is how tall the terrain's relief prints; the vertical
+//     exaggeration follows from it and each resort's real relief.
 //   - The aspect-lock toggle ties width to height for the print.
 //   - For circle / hexagon, the print is described by a single diameter
 //     (since aspect is fixed by the shape).
@@ -23,7 +26,8 @@ export interface SizeState {
   /** Shape's pre-rotation height in inches. */
   heightInches: number;
   baseThicknessInches: number;
-  verticalExaggeration: number;
+  /** Base-to-peak height of the terrain on the print, in inches. */
+  reliefInches: number;
   /** When true, the rectangle's height is forced equal to its width. */
   aspectLocked: boolean;
 }
@@ -34,6 +38,8 @@ interface Props {
   rotation: number;
   onChange: (next: SizeState) => void;
   bbox: Bbox | null;
+  /** Exaggeration the current model height works out to, once terrain is loaded. */
+  exaggeration: number | null;
   /** Sets the SHAPE's real-world width in meters (not the bbox AABB). */
   onShapeWidthMetersChange: (widthMeters: number) => void;
 }
@@ -44,6 +50,7 @@ export default function SizeControls({
   rotation,
   onChange,
   bbox,
+  exaggeration,
   onShapeWidthMetersChange,
 }: Props) {
   // The bbox is the AABB of the rotated shape. Back out the shape's own
@@ -157,30 +164,36 @@ export default function SizeControls({
 
       <fieldset className="space-y-2">
         <legend className="text-slate-400 uppercase tracking-wider text-xs mb-1">
-          Vertical exaggeration
+          Model height
         </legend>
         <div className="flex items-center gap-3">
           <input
             type="range"
-            min={1}
-            max={5}
-            step={0.1}
-            value={size.verticalExaggeration}
+            min={0.25}
+            max={4}
+            step={0.05}
+            value={size.reliefInches}
             onChange={(e) =>
               onChange({
                 ...size,
-                verticalExaggeration: parseFloat(e.target.value),
+                reliefInches: parseFloat(e.target.value),
               })
             }
             className="flex-1 accent-amber-400"
           />
           <span className="font-mono text-xs w-10 text-right">
-            {size.verticalExaggeration.toFixed(1)}&times;
+            {size.reliefInches.toFixed(2)}&Prime;
           </span>
         </div>
         <p className="text-xs text-slate-500">
-          True scale (1&times;) usually looks flat on a small print. 2&ndash;3&times;
-          tends to read best.
+          Base to peak on the print, set the same for every resort.
+          {exaggeration !== null && (
+            <>
+              {" "}
+              This one works out to{" "}
+              <span className="font-mono">{exaggeration.toFixed(1)}&times;</span> true scale.
+            </>
+          )}
         </p>
       </fieldset>
 

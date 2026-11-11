@@ -2,7 +2,7 @@
 
 // Engraving toggles:
 //   - "Label + compass": adds a beveled plinth around the model and
-//     engraves the place name plus a north-pointing compass arrow on
+//     engraves the place name plus a compass rose on
 //     the rim facing the resort's base (the bottom of the frame when
 //     there is no resort). The rim is tilted 35° from horizontal so
 //     the engraving faces up when the model sits on a desk.
@@ -31,7 +31,7 @@ export default function EngravingControls({ label, brand, onChange }: Props) {
         <span className="leading-snug">
           <span className="text-slate-200">Label + compass</span>
           <span className="block text-[10px] text-slate-500">
-            Adds a beveled plinth with the place name and a north arrow on the rim facing the base area.
+            Adds a beveled plinth with the place name and a compass rose on the rim facing the base area.
           </span>
         </span>
       </label>

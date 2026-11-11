@@ -187,6 +187,7 @@ export function assembleResort(cells: Cell[], bbox: Bbox): ResortData {
           convention: r.c,
           coords,
           isArea: r.p !== undefined,
+          areas: r.a,
         });
       });
     }
@@ -200,6 +201,7 @@ export function assembleResort(cells: Cell[], bbox: Bbox): ResortData {
           name: l.n ?? undefined,
           type: (LIFT_TYPES.has(l.t) ? l.t : "other") as LiftType,
           coords,
+          areas: l.a,
         });
       });
     }

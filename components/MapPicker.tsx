@@ -54,7 +54,8 @@ interface Props {
   rotation: number;
   onCenterChange: (next: LngLat) => void;
   /** Sets new shape pre-rotation dimensions in inches. */
-  onResize: (widthInches: number, heightInches: number) => void;
+  /** A new shape in inches at the current map scale, and its center if that moved. */
+  onResize: (widthInches: number, heightInches: number, center?: LngLat) => void;
   onRotationChange: (rotationDeg: number) => void;
   flyTo?: LngLat | null;
   /** Runs and lifts to draw under the shape overlay; null hides the layer. */
@@ -573,8 +574,7 @@ export default function MapPicker({
 
         const midLng = (draggedGeo[0] + anchorGeo[0]) / 2;
         const midLat = (draggedGeo[1] + anchorGeo[1]) / 2;
-        onResizeRef.current(newW, newH);
-        onCenterRef.current([midLng, midLat]);
+        onResizeRef.current(newW, newH, [midLng, midLat]);
       };
       const onUp = (e: PointerEvent) => {
         dragging = false;

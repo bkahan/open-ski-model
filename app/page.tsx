@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import DensityControls from "@/components/DensityControls";
 import EngravingControls from "@/components/EngravingControls";
+import FinishControls from "@/components/FinishControls";
 import ResortControls from "@/components/ResortControls";
 import SearchBar from "@/components/SearchBar";
 import ShapeControls from "@/components/ShapeControls";
@@ -52,6 +53,14 @@ import {
   shapeIsRotatable,
   type Shape,
 } from "@/lib/shape";
+import { frameAroundResort } from "@/lib/resort/frame";
+import {
+  DEFAULT_RELIEF_INCHES,
+  exaggerationForRelief,
+  fitDragToPrint,
+  reliefForResizedPrint,
+  scaleForResizedPrint,
+} from "@/lib/print-fit";
 import type { Bbox, LngLat, SearchResult } from "@/lib/types";
 import { decodeUrlState, syncUrl } from "@/lib/url-state";
 
@@ -85,6 +94,8 @@ const MAX_GRID_SIZE = 2048;
 const RESORT_FETCH_SCALE = 1.6;
 const RESORT_SEARCH_MIN_METERS = 8_000;
 const RESORT_FRAME_PADDING = 1.08;
+/** Leaves room for the outline's own margin around the outermost runs. */
+const RESORT_OUTLINE_PADDING = 1.12;
 const RESORT_FRAME_MIN_RUNS = 3;
 const RESORT_FETCH_DEBOUNCE_MS = 700;
 /** Mirrors the server cap in /api/resort. */
@@ -163,10 +174,13 @@ export default function Home() {
     widthInches: 6,
     heightInches: 6,
     baseThicknessInches: 0.25,
-    verticalExaggeration: 2,
+    reliefInches: DEFAULT_RELIEF_INCHES,
     aspectLocked: true,
   });
   const [shape, setShape] = useState<Shape>("rectangle");
+  const [silhouette, setSilhouette] = useState(false);
+  const [areaId, setAreaId] = useState<string | null>(null);
+  const [layerCount, setLayerCount] = useState(0);
   const [rotation, setRotation] = useState(0);
   const [gridSize, setGridSize] = useState<number>(DEFAULT_GRID_SIZE);
   const [engraveLabel, setEngraveLabel] = useState<boolean>(false);
@@ -203,12 +217,15 @@ export default function Home() {
     else if (locked) h = w;
 
     setShape(sh);
+    setSilhouette(sh === "rectangle" && (parsed.silhouette ?? false));
+    setAreaId(parsed.areaId ?? null);
+    setLayerCount(parsed.layerCount ?? 0);
     setRotation(rot);
     setSize({
       widthInches: w,
       heightInches: h,
       baseThicknessInches: parsed.baseThicknessInches ?? 0.25,
-      verticalExaggeration: parsed.verticalExaggeration ?? 2,
+      reliefInches: parsed.reliefInches ?? DEFAULT_RELIEF_INCHES,
       aspectLocked: locked,
     });
     const nextGridSize = parsed.gridSize !== undefined
@@ -244,11 +261,14 @@ export default function Home() {
       syncUrl({
         bbox,
         shape,
+        silhouette,
+        areaId,
+        layerCount,
         rotation,
         widthInches: size.widthInches,
         heightInches: size.heightInches,
         baseThicknessInches: size.baseThicknessInches,
-        verticalExaggeration: size.verticalExaggeration,
+        reliefInches: size.reliefInches,
         aspectLocked: size.aspectLocked,
         gridSize,
         engraveLabel,
@@ -258,7 +278,7 @@ export default function Home() {
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [bbox, shape, rotation, size, gridSize, engraveLabel, engraveBrand, resortSettings, label]);
+  }, [bbox, shape, silhouette, areaId, layerCount, rotation, size, gridSize, engraveLabel, engraveBrand, resortSettings, label]);
 
   /** Fetch runs + lifts for `area`, replacing any in-flight request. */
   const loadResort = useCallback(async (area: Bbox): Promise<ResortData | null> => {
@@ -318,6 +338,24 @@ export default function Home() {
   // intentionally do NOT auto-refit in an effect — that would race with
   // the handlers and compute scale from stale references.
 
+  const exaggeration = useMemo(() => {
+    if (!snapshot) return null;
+    const metersPerInch = scaleMPerIn(
+      snapshot.bbox,
+      snapshot.shape,
+      snapshot.widthInches,
+      snapshot.heightInches,
+      snapshot.rotation,
+    );
+    // The panel's print size can run ahead of the model on screen until
+    // the next Regenerate, so the height is read at the model's own size.
+    return exaggerationForRelief(
+      reliefForResizedPrint(size, snapshot, size.reliefInches),
+      snapshot.data.max - snapshot.data.min,
+      1 / metersPerInch,
+    );
+  }, [snapshot, size]);
+
   // Memo "starting AABB aspect" so search snapping can use it.
   const aabbAspect = useMemo(() => {
     const [hW, hH] = shapeAABBHalf(
@@ -348,21 +386,58 @@ export default function Home() {
     setFlyTo(bboxCenter(framed));
   };
 
+  /** Replaces the index's rough viewport with one around the resort's own lines. */
+  const fitFrameToResort = async (
+    result: SearchResult,
+    initialBbox: Bbox,
+    frameRotation: number,
+    widthInches: number,
+    heightInches: number,
+  ) => {
+    const data = await fetchResort(resortFetchArea(result.bbox));
+    if (bboxRef.current !== initialBbox) return;
+    const frame = frameAroundResort(data, result.id, frameRotation, RESORT_OUTLINE_PADDING);
+    if (!frame) return;
+    setBbox(
+      bboxForShape(
+        frame.center,
+        "rectangle",
+        widthInches,
+        heightInches,
+        frameRotation,
+        frame.sideMeters / Math.min(widthInches, heightInches),
+      ),
+    );
+    setFlyTo(frame.center);
+  };
+
   const handleSearch = (result: SearchResult) => {
     setLabel(result.name);
     setFlyTo(result.center);
+    setAreaId(result.kind === "resort" ? result.id : null);
 
     if (result.kind === "resort") {
       // The index gives the resort's natural viewport: turn the frame to
       // its bearing (when the shape has one) and fit its padded bounds.
       // Bearings run clockwise from north; our rotation is positive CCW.
+      // Resorts default to their own outline with the name on it.
       const nextRotation =
-        shapeIsRotatable(shape) && result.bearing !== undefined
+        result.bearing !== undefined
           ? ((Math.round(-result.bearing) % 360) + 360) % 360
           : rotation;
+      const widthInches = size.widthInches;
+      const heightInches = shape === "rectangle" ? size.heightInches : widthInches;
+      setShape("rectangle");
+      setSilhouette(true);
+      setEngraveLabel(true);
+      setSize((s) => ({ ...s, heightInches }));
       setRotation(nextRotation);
-      const [hW, hH] = shapeAABBHalf(shape, size.widthInches, size.heightInches, nextRotation);
-      setBbox(snapBboxToAspect(scaleBbox(result.bbox, RESORT_FRAME_PADDING), hW / hH, 0));
+      const [hW, hH] = shapeAABBHalf("rectangle", widthInches, heightInches, nextRotation);
+      const viewport = snapBboxToAspect(scaleBbox(result.bbox, RESORT_FRAME_PADDING), hW / hH, 0);
+      setBbox(viewport);
+      fitFrameToResort(result, viewport, nextRotation, widthInches, heightInches).catch((err) =>
+        console.error("[resort-frame]", err),
+      );
       return;
     }
 
@@ -392,6 +467,8 @@ export default function Home() {
 
   /** Translate the shape (drag-from-inside the overlay). */
   const handleCenterChange = (newCenter: LngLat) => {
+    // A moved frame is no longer about the resort that was picked.
+    setAreaId(null);
     if (!bbox) return;
     const scale = scaleMPerIn(
       bbox,
@@ -412,8 +489,15 @@ export default function Home() {
     );
   };
 
-  /** Corner / perimeter handle drag — sets new shape dimensions in inches. */
-  const handleShapeResize = (newWidthInches: number, newHeightInches: number) => {
+  /**
+   * Corner / perimeter handle drag. The drag decides what ground the frame
+   * covers; the print keeps its size and the map scale changes instead.
+   */
+  const handleShapeResize = (
+    newWidthInches: number,
+    newHeightInches: number,
+    newCenter?: LngLat,
+  ) => {
     if (!bbox) return;
     // Enforce aspect lock for rectangles. The lock is equivalent to a
     // projection of the un-constrained (W, H) drag onto the W = H line:
@@ -432,12 +516,22 @@ export default function Home() {
       size.heightInches,
       rotation,
     );
-    const center = bboxCenter(bbox);
-    setBbox(bboxForShape(center, shape, w, h, rotation, scale));
+    const fitted = fitDragToPrint({ widthInches: w, heightInches: h }, size, scale);
+    if (!fitted) return;
+    setBbox(
+      bboxForShape(
+        newCenter ?? bboxCenter(bbox),
+        shape,
+        fitted.widthInches,
+        fitted.heightInches,
+        rotation,
+        fitted.metersPerInch,
+      ),
+    );
     setSize((s) => ({
       ...s,
-      widthInches: w,
-      heightInches: h,
+      widthInches: fitted.widthInches,
+      heightInches: fitted.heightInches,
     }));
   };
 
@@ -467,6 +561,7 @@ export default function Home() {
   /** Shape change — adjust heightInches per new shape rules; refit bbox. */
   const handleShapeChange = (newShape: Shape) => {
     if (!bbox) return;
+    setSilhouette(false);
     const scale = scaleMPerIn(
       bbox,
       shape,
@@ -492,6 +587,11 @@ export default function Home() {
     setBbox(bboxForShape(center, newShape, newW, newH, newRot, scale));
   };
 
+  const handleSilhouette = () => {
+    if (shape !== "rectangle") handleShapeChange("rectangle");
+    setSilhouette(true);
+  };
+
   const handleSizeChange = (newSize: SizeState) => {
     if (!bbox) {
       setSize(newSize);
@@ -511,9 +611,16 @@ export default function Home() {
       size.heightInches,
       rotation,
     );
+    const next = { widthInches: w, heightInches: h };
     const center = bboxCenter(bbox);
-    setBbox(bboxForShape(center, shape, w, h, rotation, scale));
-    setSize({ ...newSize, widthInches: w, heightInches: h });
+    setBbox(
+      bboxForShape(center, shape, w, h, rotation, scaleForResizedPrint(size, next, scale)),
+    );
+    setSize({
+      ...newSize,
+      ...next,
+      reliefInches: reliefForResizedPrint(size, next, newSize.reliefInches),
+    });
   };
 
   const handleGenerate = async () => {
@@ -579,7 +686,12 @@ export default function Home() {
 
         <SearchBar onSelect={handleSearch} />
 
-        <ShapeControls shape={shape} onChange={handleShapeChange} />
+        <ShapeControls
+          shape={shape}
+          silhouette={silhouette}
+          onChange={handleShapeChange}
+          onSilhouette={handleSilhouette}
+        />
 
         <SizeControls
           size={size}
@@ -587,10 +699,13 @@ export default function Home() {
           rotation={rotation}
           onChange={handleSizeChange}
           bbox={bbox}
+          exaggeration={view === "viewer" ? exaggeration : null}
           onShapeWidthMetersChange={handleShapeWidthMetersChange}
         />
 
         <DensityControls gridSize={gridSize} onChange={setGridSize} />
+
+        <FinishControls layerCount={layerCount} onChange={setLayerCount} />
 
         <EngravingControls
           label={engraveLabel}
@@ -707,11 +822,14 @@ export default function Home() {
             widthInches={snapshot.widthInches}
             heightInches={snapshot.heightInches}
             baseThicknessInches={size.baseThicknessInches}
-            verticalExaggeration={size.verticalExaggeration}
+            verticalExaggeration={exaggeration ?? 1}
             engraveLabel={engraveLabel}
             engraveBrand={engraveBrand}
             label={snapshot.label}
             resort={resort}
+            silhouette={silhouette}
+            areaId={areaId}
+            layerCount={layerCount}
             showRuns={resortSettings.showRuns}
             colorScheme={resolvedScheme}
             showLifts={resortSettings.showLifts}
