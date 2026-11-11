@@ -35,6 +35,7 @@ import {
 } from "@/lib/mesh/watertight";
 import { buildContourLines } from "@/lib/mesh/contours";
 import { buildModelSolids, unionForExport, type BuiltModel, type ModelSpec } from "@/lib/mesh/engrave";
+import type { InlaySpec } from "@/lib/mesh/inlays";
 import { loadManifold, vertexDataFromManifold, type ColorAt, type TriMesh } from "@/lib/mesh/manifold";
 import { buildColorBodies } from "@/lib/mesh/multicolor";
 import { buildThreeMf } from "@/lib/mesh/three-mf";
@@ -56,7 +57,7 @@ import {
 import { exportToStep } from "@/lib/mesh/step-export";
 import { loadFont } from "@/lib/mesh/text";
 import type { ElevationResponse } from "@/lib/elevation/types";
-import type { ColorScheme } from "@/lib/resort/colors";
+import { LIFT_COLOR, runColor, type ColorScheme, type Rgb } from "@/lib/resort/colors";
 import type { ResortData } from "@/lib/resort/types";
 import {
   pointInShape,
@@ -309,6 +310,31 @@ export default function ModelViewer({
     };
   }, [layerCount, bbox, data, shape, widthInches, heightInches, rotation, baseThicknessInches, verticalExaggeration, insideOutline, resort, showRuns, showLifts, minRunWidthMm, areaId, colorScheme]);
 
+  // On smooth terrain the runs and lifts are set in as color bodies, the
+  // same ones the 3MF carries. Not before a pending outline is traced: the
+  // build would only be thrown away.
+  const inlays = useMemo((): InlaySpec | null => {
+    if (layerCount > 0 || !resort || !showRuns) return null;
+    if (outlineInputs && !outline) return null;
+    const plane = { bbox, data, shape, widthInches, heightInches, rotation };
+    const [halfW] = shapeAABBHalf(shape, widthInches, heightInches, rotation);
+    return {
+      groups: resortGrooveGroups({ ...plane, resort, areaId, scheme: colorScheme, showLifts, minWidthMm: minRunWidthMm }),
+      // A frame's edge is only as exact as the elevation grid, so color
+      // keeps one more cell away from it than from a traced outline.
+      edgeMarginInches: outline ? 0 : (halfW * 2) / (data.width - 1),
+    };
+  }, [layerCount, bbox, data, shape, widthInches, heightInches, rotation, outlineInputs, outline, resort, showRuns, showLifts, minRunWidthMm, areaId, colorScheme]);
+
+  const inlayColors = useMemo(() => {
+    const colors = new Map<string, Rgb>([[LIFT_COLOR.name, LIFT_COLOR.rgb]]);
+    for (const run of resort?.runs ?? []) {
+      const color = runColor(run.difficulty, colorScheme);
+      colors.set(color.name, color.rgb);
+    }
+    return colors;
+  }, [resort, colorScheme]);
+
   // --- 1. Bootstrap engine + scene once ---
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -531,13 +557,14 @@ export default function ModelViewer({
       brand: engraveBrand,
       outline,
       layers,
+      inlays,
     };
     const terrainTriMesh =
       vertexData.positions && vertexData.indices
         ? { positions: vertexData.positions, indices: vertexData.indices }
         : null;
     buildInputsRef.current = terrainTriMesh ? { mesh: terrainTriMesh, spec: modelSpec } : null;
-    if (engraveLabel || engraveBrand || outline || layers) {
+    if (engraveLabel || engraveBrand || outline || layers || inlays) {
       (async () => {
         try {
           const [m, font] = await Promise.all([loadManifold(), loadFont()]);
@@ -549,7 +576,7 @@ export default function ModelViewer({
           }
           builtRef.current = built;
 
-          if ((engraveBrand && !built.plinth) || outline || layers) {
+          if ((engraveBrand && !built.plinth) || outline || layers || inlays) {
             const topY = terrain.getBoundingInfo().boundingBox.maximum.y;
             const branded = meshFromSolid(
               scene,
@@ -565,13 +592,19 @@ export default function ModelViewer({
             terrain.dispose();
             terrainRef.current = branded;
           }
+          const fills: Mesh[] = [];
           if (built.plinth) {
             plinthRef.current = meshFromSolid(scene, "plinth", built.plinth, plinthMat, undefined, !outline);
             const inlayMat = inlayMatRef.current ?? plinthMat;
-            inlaysRef.current = built.inlays.map((solid, i) =>
-              meshFromSolid(scene, `inlay-${i}`, solid, inlayMat),
-            );
+            fills.push(...built.inlays.map((solid, i) => meshFromSolid(scene, `inlay-${i}`, solid, inlayMat)));
           }
+          for (const { key, solid } of built.grooveInlays) {
+            const rgb = inlayColors.get(key) ?? LIFT_COLOR.rgb;
+            const body = meshFromSolid(scene, `color-${key}`, solid, terrainMat, () => rgb, false);
+            body.position.y = plinthTopY;
+            fills.push(body);
+          }
+          inlaysRef.current = fills;
           // Once per generated model, so adjusting a slider doesn't move the view.
           if (outline && framedDataRef.current !== data && cameraRef.current) {
             framedDataRef.current = data;
@@ -589,7 +622,7 @@ export default function ModelViewer({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label, plateFacing, outline, insideOutline, plinthTopY, layers]);
+  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label, plateFacing, outline, insideOutline, plinthTopY, layers, inlays, inlayColors]);
 
   // --- 2b. Runs + lifts draped on the terrain ---
   // Separate from the terrain rebuild so toggling lifts or changing the
@@ -603,7 +636,8 @@ export default function ModelViewer({
       m.dispose();
     }
     ribbonsRef.current = [];
-    if (!resort || !showRuns) return;
+    // Smooth terrain shows the color bodies themselves.
+    if (!resort || !showRuns || inlays) return;
 
     const groups = buildRunRibbons({
       bbox,
@@ -648,6 +682,7 @@ export default function ModelViewer({
     plinthTopY,
     insideOutline,
     layers,
+    inlays,
     resort,
     showRuns,
     colorScheme,
@@ -699,8 +734,8 @@ export default function ModelViewer({
         solid.delete();
       }
     }
-    // Without the solids this would export the uncut, unstacked block.
-    if (outlineInputs || layers) return null;
+    // Without the solids this would export the uncut, unstacked block with no runs.
+    if (outlineInputs || layers || inlays) return null;
     const positions = terrain.getVerticesData(VertexBuffer.PositionKind);
     const indices = terrain.getIndices();
     if (!positions || !indices) return null;
@@ -708,7 +743,7 @@ export default function ModelViewer({
     const lifted = Float32Array.from(positions);
     for (let i = 1; i < lifted.length; i += 3) lifted[i] += terrain.position.y;
     return { positions: lifted, indices };
-  }, [outlineInputs, layers]);
+  }, [outlineInputs, layers, inlays]);
 
   const exportSTL = useCallback(() => {
     const scene = sceneRef.current;

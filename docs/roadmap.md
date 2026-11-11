@@ -93,6 +93,23 @@ no visible text. Replacing both:
 - Fills are 3 layers (0.6 mm), lose crossings by priority (lifts, black,
   red, orange, blue, green), and drop regions under 0.8 mm wide.
 
+### Smooth color inlays (done, needs a slicer test)
+
+- On the Smooth finish, runs and lifts are solid color bodies set flush
+  into the terrain, 0.6 mm deep (three layers). The white body is the
+  terrain with those pockets cut out, so the bodies add back up to the
+  original solid with nothing overlapping. The viewer shows these bodies,
+  and the 3MF carries them. STL and STEP export the white body, so the
+  runs read as grooves.
+- Colors are settled in plan before any solid is cut: crossings go by
+  priority (lifts, black, red, orange, blue, green, gray), regions under
+  0.8 mm wide or 1 mm² are dropped, white walls under 0.4 mm go to the
+  color beside them, and color stops 0.8 mm short of the model's edge.
+- Still open: the Stacked finish and the ribbon overlay it uses are due
+  to be removed; preview colors come from the trail scheme, not the
+  filament list (one AMS prints lifts in black); forest on a second AMS
+  only exists on Stacked.
+
 ### Phase R2 — inlay bodies
 
 - Turn each color group into a solid: ribbon extruded ~0.8 mm down into
