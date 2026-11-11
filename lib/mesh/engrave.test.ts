@@ -16,6 +16,8 @@ import {
   buildNameplateSolids,
   fitNameplate,
   plateFacingDeg,
+  plateGlyphs,
+  plateTextWidth,
   plateTurnDeg,
   roseDiameterInches,
 } from "./nameplate";
@@ -136,6 +138,76 @@ describe("fitNameplate", () => {
     expect(layout).toBeNull();
   });
 
+  it("sets the place under the name in smaller letters", () => {
+    const plate = { shape: "rectangle" as Shape, ...base, label: "Jay Peak Resort", compass: true };
+    const alone = fitNameplate(font, plate)!;
+    const layout = fitNameplate(font, { ...plate, place: "Jay, VT" })!;
+    expect(layout.text).toBe("Jay Peak Resort");
+    expect(layout.place).toBe("Jay, VT");
+    // The name gives up height to make room, and neither line drops below 3 mm.
+    expect(layout.capInches).toBeLessThan(alone.capInches);
+    expect(layout.placeCapInches).toBeLessThan(layout.capInches);
+    expect(layout.placeCapInches).toBeGreaterThanOrEqual(3 / 25.4 - 1e-9);
+  });
+
+  it("drops the place, not the name, when the two won't fit", () => {
+    const tiny = { shape: "circle" as Shape, widthInches: 2, heightInches: 2, rotation: 0, compass: true };
+    const alone = fitNameplate(font, { ...tiny, label: "Sugarloaf" })!;
+    const layout = fitNameplate(font, { ...tiny, label: "Sugarloaf", place: "Carrabassett Valley, ME" })!;
+    expect(layout).toEqual(alone);
+    expect(layout.place).toBe("");
+  });
+
+  it("gives up a generic word in the name before it gives up the place", () => {
+    // Shrinking the plinth squeezes the plate through its stages in order.
+    const stages: string[] = [];
+    for (let w = 4; w >= 2; w -= 0.02) {
+      const layout = fitNameplate(font, {
+        shape: "circle",
+        widthInches: w,
+        heightInches: w,
+        rotation: 0,
+        label: "Loon Mountain Resort",
+        place: "Lincoln, NH",
+        compass: true,
+      })!;
+      const stage = `${layout.text} | ${layout.place}`;
+      if (stages.at(-1) !== stage) stages.push(stage);
+    }
+    expect(stages.slice(0, 2)).toEqual([
+      "Loon Mountain Resort | Lincoln, NH",
+      "Loon Mountain | Lincoln, NH",
+    ]);
+  });
+
+  it("treats a place with no name as the name", () => {
+    const layout = fitNameplate(font, { shape: "rectangle", ...base, label: "", place: "Jay, VT", compass: true })!;
+    expect(layout.text).toBe("Jay, VT");
+    expect(layout.place).toBe("");
+  });
+
+  it("starts both lines at the same left edge, centered top to bottom as a pair", () => {
+    const layout = fitNameplate(font, { shape: "rectangle", ...base, label: "HILL", place: "HIGH", compass: true })!;
+    const glyphs = plateGlyphs(font, layout);
+    expect(glyphs).toHaveLength(8);
+    const edges = (g: (typeof glyphs)[number]) => {
+      const xs = g.contours.flat().map(([x]) => x + g.centerX);
+      const ys = g.contours.flat().map(([, y]) => y);
+      return { left: Math.min(...xs), right: Math.max(...xs), top: Math.max(...ys), bottom: Math.min(...ys) };
+    };
+    const nameH = edges(glyphs[0]);
+    const placeH = edges(glyphs[4]);
+    // Same letter at two sizes: the stems line up to within the letter's own side bearing.
+    expect(Math.abs(nameH.left - placeH.left)).toBeLessThan(0.1 * layout.capInches);
+    expect(placeH.top).toBeLessThan(nameH.bottom);
+    // The rose sits at zero, so the pair has to straddle it evenly.
+    expect(nameH.top).toBeCloseTo(-placeH.bottom, 6);
+    expect(nameH.top - nameH.bottom).toBeCloseTo(layout.capInches, 3);
+    expect(placeH.top - placeH.bottom).toBeCloseTo(layout.placeCapInches, 3);
+    const right = Math.max(...glyphs.map((g) => edges(g).right));
+    expect(right).toBeLessThanOrEqual(plateTextWidth(font, layout) + 1e-9);
+  });
+
   it("returns null with nothing to show", () => {
     expect(fitNameplate(font, { shape: "rectangle", ...base, label: "  ", compass: false })).toBeNull();
   });
@@ -228,6 +300,36 @@ describe("buildNameplateSolids", () => {
         expect(box.min[1]).toBeLessThan(h / 2);
         expect(box.max[1]).toBeGreaterThan(h / 2);
       }
+    });
+  });
+
+  it("cuts both lines into the face with the rose to their right", () => {
+    const { solids, layout } = buildNameplateSolids(m, font, {
+      shape: "rectangle",
+      ...base,
+      label: "HILL",
+      place: "HIGH",
+      compass: true,
+    });
+    withSolids(solids, () => {
+      expect(layout?.place).toBe("HIGH");
+      expect(solids).toHaveLength(9);
+      const boxes = solids.map((s) => s.boundingBox());
+      const rose = boxes[8];
+      const mid = (box: (typeof boxes)[number], axis: number) => (box.min[axis] + box.max[axis]) / 2;
+      for (const box of boxes.slice(0, 8)) expect(box.max[0]).toBeLessThan(rose.min[0]);
+      // The name sits higher up the chamfer than the place, and the rose
+      // between the top of one and the bottom of the other.
+      for (let i = 0; i < 4; i++) expect(mid(boxes[i], 1)).toBeGreaterThan(mid(boxes[4 + i], 1));
+      expect(mid(rose, 1)).toBeLessThan(boxes[0].max[1]);
+      expect(mid(rose, 1)).toBeGreaterThan(boxes[4].min[1]);
+      // A plate with no place leaves the rose exactly where this one has it.
+      const plain = buildNameplateSolids(m, font, { shape: "rectangle", ...base, label: "HILL", compass: true });
+      withSolids(plain.solids, () => {
+        const plainRose = plain.solids[4].boundingBox();
+        expect(mid(plainRose, 1)).toBeCloseTo(mid(rose, 1), 6);
+        expect(mid(plainRose, 2)).toBeCloseTo(mid(rose, 2), 6);
+      });
     });
   });
 
