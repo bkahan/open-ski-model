@@ -178,26 +178,20 @@ function claimGround(m: ManifoldToplevel, groups: InlayGroup[], allowed: CrossSe
   }
 }
 
-/**
- * Hands every strip of white too thin to print to a color beside it, the
- * highest priority first. Left alone, the slicer would drop the strip and
- * leave a slot between two colors.
- */
-function absorbThinWhite(
+/** The white left between and around the colors that is too thin to print. */
+function thinWhite(
   m: ManifoldToplevel,
   plans: ColorPlan[],
   footprint: CrossSection,
   allowed: CrossSection,
-): ColorPlan[] {
-  if (plans.length === 0) return plans;
+): CrossSection {
   const colored = m.CrossSection.union(plans.map((p) => p.section));
-  let thin: CrossSection;
   try {
     const white = footprint.subtract(colored);
     try {
       const printable = opened(white, MIN_WHITE_HALF_WIDTH_IN);
       try {
-        thin = pipeSections(white.subtract(printable), [(s) => s.intersect(allowed)]);
+        return pipeSections(white.subtract(printable), [(s) => s.intersect(allowed)]);
       } finally {
         printable.delete();
       }
@@ -207,19 +201,32 @@ function absorbThinWhite(
   } finally {
     colored.delete();
   }
+}
 
+/**
+ * Hands every strip of white too thin to print to a color beside it, the
+ * highest priority first. Left alone, the slicer would drop the strip and
+ * leave a slot between two colors. Takes over `plans` and frees them.
+ */
+function absorbThinWhite(
+  m: ManifoldToplevel,
+  plans: ColorPlan[],
+  footprint: CrossSection,
+  allowed: CrossSection,
+): ColorPlan[] {
   const grown: ColorPlan[] = [];
+  let thin: CrossSection | null = null;
   try {
+    if (plans.length === 0) return grown;
+    thin = thinWhite(m, plans, footprint, allowed);
     for (const { key, section } of plans) {
-      if (thin.isEmpty()) {
-        grown.push({ key, section: withoutDebris(m, section) });
-        continue;
-      }
       const reach = section.offset(WHITE_REACH_IN, "Round", 2, ARC_SEGMENTS);
       try {
         const gain = thin.intersect(reach);
         try {
-          grown.push({ key, section: pipeSections(section.add(gain), [(s) => withoutDebris(m, s)]) });
+          const tidy = pipeSections(section.add(gain), [(s) => withoutDebris(m, s)]);
+          if (tidy.isEmpty()) tidy.delete();
+          else grown.push({ key, section: tidy });
           const rest = thin.subtract(gain);
           thin.delete();
           thin = rest;
@@ -235,7 +242,7 @@ function absorbThinWhite(
     freePlans(grown);
     throw err;
   } finally {
-    thin.delete();
+    thin?.delete();
     freePlans(plans);
   }
 }
