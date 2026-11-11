@@ -44,14 +44,41 @@ no visible text. Replacing both:
   downhill direction of runs and lifts, snapped to a face on rectangles
   and hexagons; frame bottom without a resort) with Manifold, glyph by
   glyph so they follow a circular plinth's cone. Cap height is 38% of the
-  chamfer slope (3–9 mm), shrunk to fit. A name that still won't fit at
-  3 mm drops what follows a comma, then a trailing "Resort" / "Ski Area",
+  chamfer slope (6–9 mm, see E5), shrunk to fit. A name that still won't fit at
+  6 mm drops what follows a comma, then a trailing "Resort" / "Ski Area",
   and only then is cut with "…". Hexagon sides are too short to share, so
   the rose gets the next face.
   Fill bodies for each pocket are kept as inlays (previewed dark) for
   multicolor export.
 - E3 (done): STL/STEP export from the Manifold union of terrain and
   plinth. Babylon CSG and the raised-text fallback are gone.
+- E4 (done): a second line under the name for the town and state, set in
+  capitals ("JAY, VT", "ZERMATT, SWITZERLAND"). The name is capped at 35%
+  of the slope, the second line is 70% of that (never under 4.4 mm), both
+  left-aligned, and the rose
+  sits to their right, centered on the pair. The second line is the first
+  thing given up: a plate too short for both lines is laid out exactly as
+  it was with one. Picking a resort fills the line from the ski-area
+  index, then replaces it with a Nominatim reverse lookup at the base
+  area (the lift station most runs finish at), since the index's town is
+  often a hamlet or the next town over. The line is editable and travels
+  in the link as `place`.
+- E5 (done for the plate, open for the brand and the rose): plate text
+  sized and spaced for a 0.4 mm nozzle (`lib/mesh/printable.ts`).
+  - Strokes are thickened until the font's thinnest straight stroke is
+    0.8 mm, two passes of the nozzle. Roboto Regular's bars are 0.108 of
+    the cap height, so anything under 7.4 mm tall is thickened.
+  - Letters are spread by what the thickening took from the gaps, and
+    letters the font sets tight (tt, rt, VT, the L and A of L'A) are
+    moved apart until 0.5 mm of plate is left between any two.
+  - Thickening narrows the openings inside letters. Lower case keeps
+    0.5 mm openings down to 6 mm caps; below that the mouths of a, e, g
+    and s close and the dots of i and j touch their stems. Capitals keep
+    them down to 4.4 mm. Hence a 6 mm floor for the name (it was 3 mm)
+    and capitals for the smaller second line.
+  - Not yet done: the bottom brand (3 mm lower case, 0.38 mm strokes)
+    and the compass letters (the S's openings are about 0.2 mm). Both
+    need a size change that moves other things.
 
 ### Print sizing (done)
 

@@ -145,6 +145,8 @@ function resortToResult(hit: SkiAreaHit): SearchResult {
     center: hit.center,
     bearing: hit.bearing,
     convention: hit.convention,
+    location: hit.location,
+    countryCode: hit.countryCode,
   };
 }
 

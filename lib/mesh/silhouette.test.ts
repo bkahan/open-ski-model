@@ -128,6 +128,62 @@ describe("buildOutlinePlinth", () => {
   });
 });
 
+describe("buildOutlinePlinth with a place line", () => {
+  const outline: Contour = Array.from({ length: 48 }, (_, i): [number, number] => {
+    const a = (i / 48) * Math.PI * 2;
+    return [2.5 * Math.cos(a), 2.5 * Math.sin(a)];
+  });
+
+  it("sets the place under the name and the rose beside the pair, all on the tab", () => {
+    const built = buildOutlinePlinth(m, font, {
+      outline,
+      label: "Sugarloaf",
+      place: "Carrabassett Valley, ME",
+      compass: true,
+    });
+    withSolids([built.slab, ...built.solids], () => {
+      expect(built.layout?.text).toBe("Sugarloaf");
+      expect(built.layout?.place).toBe("CARRABASSETT VALLEY, ME");
+      const letters = "Sugarloaf".length + "CarrabassettValley,ME".length;
+      expect(built.solids).toHaveLength(letters + 1);
+
+      const slab = built.slab.boundingBox();
+      const boxes = built.solids.map((s) => s.boundingBox());
+      const rose = boxes[letters];
+      const midZ = (box: (typeof boxes)[number]) => (box.min[2] + box.max[2]) / 2;
+      for (const box of boxes) {
+        // Every pocket is cut into the slab, not hanging off the tab's end.
+        expect(box.min[0]).toBeGreaterThan(slab.min[0]);
+        expect(box.max[0]).toBeLessThan(slab.max[0]);
+        expect(box.min[2]).toBeGreaterThan(slab.min[2]);
+      }
+      for (const box of boxes.slice(0, letters)) expect(box.max[0]).toBeLessThan(rose.min[0]);
+      // The tab faces south, so the name is the line nearer the model.
+      const nameZ = midZ(boxes[0]);
+      const placeZ = midZ(boxes["Sugarloaf".length]);
+      expect(nameZ).toBeGreaterThan(placeZ);
+      expect(midZ(rose)).toBeLessThan(boxes[0].max[2]);
+      expect(midZ(rose)).toBeGreaterThan(boxes["Sugarloaf".length].min[2]);
+    });
+  });
+
+  it("leaves the place off a tab too short for it and sets the name as before", () => {
+    const small = outline.map(([x, z]): [number, number] => [x * 0.4, z * 0.4]);
+    const plain = buildOutlinePlinth(m, font, { outline: small, label: "Alta", compass: true });
+    const built = buildOutlinePlinth(m, font, {
+      outline: small,
+      label: "Alta",
+      place: "Little Cottonwood Canyon, UT",
+      compass: true,
+    });
+    withSolids([plain.slab, ...plain.solids, built.slab, ...built.solids], () => {
+      expect(built.layout).toEqual(plain.layout);
+      expect(built.layout?.place).toBe("");
+      expect(built.solids).toHaveLength("Alta".length + 1);
+    });
+  });
+});
+
 describe("buildModelSolids with an outline", () => {
   const bbox: Bbox = [-72.53, 44.91, -72.47, 44.95];
   const size = 40;

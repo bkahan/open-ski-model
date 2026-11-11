@@ -53,6 +53,7 @@ import {
   type Shape,
 } from "@/lib/shape";
 import { frameAroundResort } from "@/lib/resort/frame";
+import { lookupPlace, placeFromIndex, placeLine, resortBasePoint } from "@/lib/resort/place";
 import {
   DEFAULT_RELIEF_INCHES,
   exaggerationForRelief,
@@ -186,6 +187,7 @@ export default function Home() {
   const [bbox, setBbox] = useState<Bbox | null>(null);
   const [flyTo, setFlyTo] = useState<LngLat | null>(null);
   const [label, setLabel] = useState<string | undefined>("Jay Peak");
+  const [place, setPlace] = useState("");
   const [view, setView] = useState<View>("map");
   const [snapshot, setSnapshot] = useState<ViewerSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -238,6 +240,7 @@ export default function Home() {
       colorScheme: parsed.colorScheme ?? DEFAULT_RESORT_SETTINGS.colorScheme,
     });
     setLabel(parsed.label ?? "Jay Peak");
+    setPlace(parsed.place ?? "");
     const nextBbox = parsed.bbox
       ?? bboxForShape(
         DEFAULT_CENTER,
@@ -271,10 +274,11 @@ export default function Home() {
         engraveBrand,
         ...resortSettings,
         label,
+        place,
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [bbox, shape, silhouette, areaId, rotation, size, gridSize, engraveLabel, engraveBrand, resortSettings, label]);
+  }, [bbox, shape, silhouette, areaId, rotation, size, gridSize, engraveLabel, engraveBrand, resortSettings, label, place]);
 
   /** Fetch runs + lifts for `area`, replacing any in-flight request. */
   const loadResort = useCallback(async (area: Bbox): Promise<ResortData | null> => {
@@ -317,6 +321,10 @@ export default function Home() {
     }, RESORT_FETCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [bbox, resort, resortLoading, resortSettings.showRuns, loadResort]);
+
+  // The resort whose town is still being looked up for the plate's second
+  // line. A newer pick, or the user going to edit the line, drops it.
+  const placeLookupRef = useRef<string | null>(null);
 
   // Latest bbox for async handlers that must not clobber newer edits.
   const bboxRef = useRef<Bbox | null>(bbox);
@@ -389,8 +397,9 @@ export default function Home() {
     frameRotation: number,
     widthInches: number,
     heightInches: number,
+    lines: Promise<ResortData>,
   ) => {
-    const data = await fetchResort(resortFetchArea(result.bbox));
+    const data = await lines;
     if (bboxRef.current !== initialBbox) return;
     const frame = frameAroundResort(data, result.id, frameRotation, RESORT_OUTLINE_PADDING);
     if (!frame) return;
@@ -407,8 +416,26 @@ export default function Home() {
     setFlyTo(frame.center);
   };
 
+  /**
+   * Looks the picked resort's town up, once: at its base area when its
+   * lines say where that is, at its center when they don't or didn't load.
+   */
+  const fillPlace = async (result: SearchResult, lines: Promise<ResortData>) => {
+    const data = await lines.catch(() => null);
+    if (placeLookupRef.current !== result.id) return;
+    const point = (data && resortBasePoint(data, result.id)) ?? result.center;
+    const parts = await lookupPlace(point);
+    if (placeLookupRef.current !== result.id) return;
+    placeLookupRef.current = null;
+    if (parts?.town) setPlace(placeLine(parts));
+  };
+
   const handleSearch = (result: SearchResult) => {
     setLabel(result.name);
+    // The index's own idea of the place shows at once. Its towns are often
+    // a hamlet or the next town over, so fillPlace replaces it.
+    setPlace(result.kind === "resort" ? placeLine(placeFromIndex(result.location ?? null, result.countryCode ?? null)) : "");
+    placeLookupRef.current = result.kind === "resort" ? result.id : null;
     setFlyTo(result.center);
     setAreaId(result.kind === "resort" ? result.id : null);
 
@@ -431,9 +458,14 @@ export default function Home() {
       const [hW, hH] = shapeAABBHalf("rectangle", widthInches, heightInches, nextRotation);
       const viewport = snapBboxToAspect(scaleBbox(result.bbox, RESORT_FRAME_PADDING), hW / hH, 0);
       setBbox(viewport);
-      fitFrameToResort(result, viewport, nextRotation, widthInches, heightInches).catch((err) =>
+      const lines = fetchResort(resortFetchArea(result.bbox));
+      fitFrameToResort(result, viewport, nextRotation, widthInches, heightInches, lines).catch((err) =>
         console.error("[resort-frame]", err),
       );
+      fillPlace(result, lines).catch((err: unknown) => {
+        if (placeLookupRef.current === result.id) placeLookupRef.current = null;
+        console.warn("[place] lookup failed", err);
+      });
       return;
     }
 
@@ -708,6 +740,14 @@ export default function Home() {
             setEngraveLabel(l);
             setEngraveBrand(b);
           }}
+          place={place}
+          onPlaceEditStart={() => {
+            placeLookupRef.current = null;
+          }}
+          onPlaceChange={(next) => {
+            placeLookupRef.current = null;
+            setPlace(next);
+          }}
         />
 
         <ResortControls
@@ -820,6 +860,7 @@ export default function Home() {
             engraveLabel={engraveLabel}
             engraveBrand={engraveBrand}
             label={snapshot.label}
+            place={place}
             resort={resort}
             silhouette={silhouette}
             areaId={areaId}

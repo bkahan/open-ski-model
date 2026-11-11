@@ -30,6 +30,8 @@ const OUTLINE_CUTTER_HEIGHT_IN = 100;
 
 export interface ModelSpec extends PlateSide {
   label: string;
+  /** Second line of the name plate, such as "Jay, VT". */
+  place?: string;
   /** Plinth with name plate and compass. */
   plinth: boolean;
   /** Brand text on the underside. */
@@ -117,6 +119,7 @@ export function buildModelSolids(
         const built = buildOutlinePlinth(m, font, {
           outline,
           label: spec.label,
+          place: spec.place,
           compass: true,
           facing: spec.facing,
         });
