@@ -6,8 +6,9 @@
 import type { Manifold, ManifoldToplevel } from "manifold-3d";
 import type * as opentype from "opentype.js";
 
-import type { Shape } from "@/lib/shape";
+import { shapeOutline, type Shape } from "@/lib/shape";
 
+import { inlayTerrain, type InlaySpec } from "./inlays";
 import { manifoldFromMesh, withSolids, type TriMesh } from "./manifold";
 import {
   buildNameplateSolids,
@@ -38,6 +39,8 @@ export interface ModelSpec extends PlateSide {
   outline?: Contour | null;
   /** Rebuild the terrain as flat steps. */
   layers?: TerrainLayers | null;
+  /** Set runs and lifts into the smooth terrain as color bodies. Stacked terrain cuts its own. */
+  inlays?: InlaySpec | null;
 }
 
 export interface BuiltModel {
@@ -103,6 +106,15 @@ export function buildModelSolids(
       release(terrain);
       terrain = stacked.terrain;
       grooveInlays = stacked.inlays;
+    } else if (spec.inlays) {
+      const footprint =
+        outline ?? shapeOutline(spec.shape, spec.widthInches, spec.heightInches, spec.rotation);
+      const inlaid = inlayTerrain(m, terrain, footprint, spec.inlays);
+      own(inlaid.terrain);
+      for (const inlay of inlaid.inlays) own(inlay.solid);
+      release(terrain);
+      terrain = inlaid.terrain;
+      grooveInlays = inlaid.inlays;
     }
 
     let brandSpin = spec.rotation + plateTurnDeg(spec);
