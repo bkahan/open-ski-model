@@ -36,6 +36,13 @@ describe("model height url state", () => {
     expect(decoded.reliefInches).toBe(1.5);
   });
 
+  it("round-trips the name plate's second line and omits it when empty", () => {
+    expect(encodeUrlState(base).has("place")).toBe(false);
+    const params = encodeUrlState({ ...base, place: "Carrabassett Valley, ME" });
+    expect(decodeUrlState(params).place).toBe("Carrabassett Valley, ME");
+    expect(decodeUrlState(new URLSearchParams(params.toString())).place).toBe("Carrabassett Valley, ME");
+  });
+
   it("round-trips the ski area id", () => {
     expect(encodeUrlState(base).has("ra")).toBe(false);
     expect(decodeUrlState(encodeUrlState({ ...base, areaId: "abc123" })).areaId).toBe("abc123");

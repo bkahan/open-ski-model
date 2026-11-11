@@ -75,6 +75,8 @@ interface Props {
   engraveLabel: boolean;
   engraveBrand: boolean;
   label?: string;
+  /** Second line of the name plate, such as "Jay, VT". */
+  place?: string;
   /** The resort in frame, if any; it also decides which way the name plate faces. */
   resort: ResortData | null;
   /** Cut the model to the resort's outline when there is one. */
@@ -170,6 +172,7 @@ export default function ModelViewer({
   engraveLabel,
   engraveBrand,
   label,
+  place,
   resort,
   silhouette,
   areaId,
@@ -510,6 +513,7 @@ export default function ModelViewer({
       rotation,
       facing: plateFacing,
       label: label ?? "",
+      place,
       plinth: engraveLabel,
       brand: engraveBrand,
       outline,
@@ -576,7 +580,7 @@ export default function ModelViewer({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label, plateFacing, outline, insideOutline, plinthTopY, inlays, inlayColors]);
+  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label, place, plateFacing, outline, insideOutline, plinthTopY, inlays, inlayColors]);
 
   // --- 3. Toggle contour visibility without rebuilding ---
   useEffect(() => {

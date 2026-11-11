@@ -53,6 +53,7 @@ import {
   type Shape,
 } from "@/lib/shape";
 import { frameAroundResort } from "@/lib/resort/frame";
+import { lookupPlace, placeFromIndex, placeLine, resortBasePoint } from "@/lib/resort/place";
 import {
   DEFAULT_RELIEF_INCHES,
   exaggerationForRelief,
@@ -186,6 +187,7 @@ export default function Home() {
   const [bbox, setBbox] = useState<Bbox | null>(null);
   const [flyTo, setFlyTo] = useState<LngLat | null>(null);
   const [label, setLabel] = useState<string | undefined>("Jay Peak");
+  const [place, setPlace] = useState("");
   const [view, setView] = useState<View>("map");
   const [snapshot, setSnapshot] = useState<ViewerSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -238,6 +240,7 @@ export default function Home() {
       colorScheme: parsed.colorScheme ?? DEFAULT_RESORT_SETTINGS.colorScheme,
     });
     setLabel(parsed.label ?? "Jay Peak");
+    setPlace(parsed.place ?? "");
     const nextBbox = parsed.bbox
       ?? bboxForShape(
         DEFAULT_CENTER,
@@ -271,10 +274,11 @@ export default function Home() {
         engraveBrand,
         ...resortSettings,
         label,
+        place,
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [bbox, shape, silhouette, areaId, rotation, size, gridSize, engraveLabel, engraveBrand, resortSettings, label]);
+  }, [bbox, shape, silhouette, areaId, rotation, size, gridSize, engraveLabel, engraveBrand, resortSettings, label, place]);
 
   /** Fetch runs + lifts for `area`, replacing any in-flight request. */
   const loadResort = useCallback(async (area: Bbox): Promise<ResortData | null> => {
@@ -317,6 +321,30 @@ export default function Home() {
     }, RESORT_FETCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [bbox, resort, resortLoading, resortSettings.showRuns, loadResort]);
+
+  // --- The picked resort's town, for the name plate's second line ---
+  // Waits for the resort's lines, which say where its base area is, then
+  // asks once. Typing in the field cancels it.
+  const placeLookupRef = useRef<string | null>(null);
+  useEffect(() => {
+    const id = placeLookupRef.current;
+    if (!id || id !== areaId || !resort) return;
+    const base = resortBasePoint(resort, id);
+    if (!base) return;
+    const ctrl = new AbortController();
+    lookupPlace(base, ctrl.signal)
+      .then((parts) => {
+        if (placeLookupRef.current !== id) return;
+        placeLookupRef.current = null;
+        if (parts?.town) setPlace(placeLine(parts));
+      })
+      .catch((err: unknown) => {
+        if (ctrl.signal.aborted) return;
+        placeLookupRef.current = null;
+        console.warn("[place] lookup failed", err);
+      });
+    return () => ctrl.abort();
+  }, [resort, areaId]);
 
   // Latest bbox for async handlers that must not clobber newer edits.
   const bboxRef = useRef<Bbox | null>(bbox);
@@ -409,6 +437,10 @@ export default function Home() {
 
   const handleSearch = (result: SearchResult) => {
     setLabel(result.name);
+    // The index's own idea of the place shows at once. Its towns are often
+    // a hamlet or the next town over, so the lookup below replaces it.
+    setPlace(result.kind === "resort" ? placeLine(placeFromIndex(result.location ?? null, result.countryCode ?? null)) : "");
+    placeLookupRef.current = result.kind === "resort" ? result.id : null;
     setFlyTo(result.center);
     setAreaId(result.kind === "resort" ? result.id : null);
 
@@ -708,6 +740,11 @@ export default function Home() {
             setEngraveLabel(l);
             setEngraveBrand(b);
           }}
+          place={place}
+          onPlaceChange={(next) => {
+            placeLookupRef.current = null;
+            setPlace(next);
+          }}
         />
 
         <ResortControls
@@ -820,6 +857,7 @@ export default function Home() {
             engraveLabel={engraveLabel}
             engraveBrand={engraveBrand}
             label={snapshot.label}
+            place={place}
             resort={resort}
             silhouette={silhouette}
             areaId={areaId}

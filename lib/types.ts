@@ -44,4 +44,7 @@ export interface SearchResult {
   bearing?: number;
   /** Resorts only: which trail-marking convention the data uses. */
   convention?: "north_america" | "europe" | "japan";
+  /** Resorts only: the index's "Locality, Region, Country" and country code. */
+  location?: string | null;
+  countryCode?: string | null;
 }
