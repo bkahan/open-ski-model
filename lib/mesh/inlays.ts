@@ -77,10 +77,16 @@ export interface ColorPlan {
   section: CrossSection;
 }
 
+/** The constructor throws when handed no polygons, so an empty section is made another way. */
+function sectionFrom(m: ManifoldToplevel, polygons: Contour[]): CrossSection {
+  return polygons.length > 0 ? new m.CrossSection(polygons, "NonZero") : m.CrossSection.compose([]);
+}
+
 /** Every path as round-jointed strips, built as one polygon soup. */
 function ribbonSection(m: ManifoldToplevel, paths: InlayPath[]): CrossSection {
   const polygons: Contour[] = [];
   for (const { points, halfWidth } of paths) {
+    if (points.length === 0) continue;
     const line = thinnedLine(points, POINT_SPACING_IN);
     line.forEach(([x, z], i) => {
       polygons.push(
@@ -103,7 +109,7 @@ function ribbonSection(m: ManifoldToplevel, paths: InlayPath[]): CrossSection {
       ]);
     });
   }
-  return new m.CrossSection(polygons, "NonZero");
+  return sectionFrom(m, polygons);
 }
 
 /** What survives shrinking by `radius` and growing back: the parts at least that wide. */
@@ -137,7 +143,7 @@ function withoutDebris(m: ManifoldToplevel, section: CrossSection): CrossSection
     const rings = (shaved.toPolygons() as Contour[]).filter(
       (ring) => Math.abs(signedArea(ring)) >= DEBRIS_AREA_IN2,
     );
-    return new m.CrossSection(rings, "NonZero");
+    return sectionFrom(m, rings);
   } finally {
     shaved.delete();
   }
@@ -224,12 +230,20 @@ function absorbThinWhite(
       try {
         const gain = thin.intersect(reach);
         try {
-          const tidy = pipeSections(section.add(gain), [(s) => withoutDebris(m, s)]);
-          if (tidy.isEmpty()) tidy.delete();
-          else grown.push({ key, section: tidy });
-          const rest = thin.subtract(gain);
-          thin.delete();
-          thin = rest;
+          // Reach is distance, not contact: a strip can be in range without
+          // touching this color, and would be a loose speck of it.
+          const tidy = pipeSections(section.add(gain), [
+            (s) => withoutDebris(m, s),
+            (s) => withoutSmallIslands(m, s),
+          ]);
+          try {
+            const rest = thin.subtract(tidy);
+            thin.delete();
+            thin = rest;
+            if (!tidy.isEmpty()) grown.push({ key, section: tidy.translate([0, 0]) });
+          } finally {
+            tidy.delete();
+          }
         } finally {
           gain.delete();
         }
@@ -248,8 +262,9 @@ function absorbThinWhite(
 }
 
 /**
- * Where each color prints, seen from above. No two overlap, none comes
- * within the edge margin of `footprint`. The caller frees the sections.
+ * Where each color prints, seen from above. No two share more than
+ * clipping noise (tens of square microns at worst), and none comes within
+ * the edge margin of `footprint`. The caller frees the sections.
  */
 export function planColors(m: ManifoldToplevel, footprint: Contour, spec: InlaySpec): ColorPlan[] {
   const footprintSection = new m.CrossSection([footprint], "NonZero");
@@ -293,10 +308,11 @@ export function inlayTerrain(
   const plans = planColors(m, footprint, spec);
   if (plans.length === 0) return { terrain: terrain.translate([0, 0, 0]), inlays: [] };
 
-  const height = terrain.boundingBox().max[1] + CUTTER_HEADROOM_IN;
-  const lowered = terrain.translate([0, -INLAY_DEPTH_IN, 0]);
   const inlays: ColorInlay[] = [];
+  let lowered: Manifold | null = null;
   try {
+    const height = terrain.boundingBox().max[1] + CUTTER_HEADROOM_IN;
+    lowered = terrain.translate([0, -INLAY_DEPTH_IN, 0]);
     for (const { key, section } of plans) {
       const cutter = pocketCutter(section, lowered, height);
       try {
@@ -326,7 +342,7 @@ export function inlayTerrain(
     for (const { solid } of inlays) solid.delete();
     throw err;
   } finally {
-    lowered.delete();
+    lowered?.delete();
     freePlans(plans);
   }
 }

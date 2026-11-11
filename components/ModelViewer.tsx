@@ -267,7 +267,11 @@ export default function ModelViewer({
         );
         setTraced({ inputs: outlineInputs, ring });
       })
-      .catch((err: unknown) => console.error("[silhouette] failed", err));
+      .catch((err: unknown) => {
+        console.error("[silhouette] failed", err);
+        // A failed trace still settles: the model falls back to its frame.
+        if (!cancelled) setTraced({ inputs: outlineInputs, ring: null });
+      });
     return () => {
       cancelled = true;
     };
@@ -311,11 +315,11 @@ export default function ModelViewer({
   }, [layerCount, bbox, data, shape, widthInches, heightInches, rotation, baseThicknessInches, verticalExaggeration, insideOutline, resort, showRuns, showLifts, minRunWidthMm, areaId, colorScheme]);
 
   // On smooth terrain the runs and lifts are set in as color bodies, the
-  // same ones the 3MF carries. Not before a pending outline is traced: the
-  // build would only be thrown away.
+  // same ones the 3MF carries. Not while an outline is still being traced:
+  // the build would only be thrown away.
   const inlays = useMemo((): InlaySpec | null => {
     if (layerCount > 0 || !resort || !showRuns) return null;
-    if (outlineInputs && !outline) return null;
+    if (outlineInputs && traced?.inputs !== outlineInputs) return null;
     const plane = { bbox, data, shape, widthInches, heightInches, rotation };
     const [halfW] = shapeAABBHalf(shape, widthInches, heightInches, rotation);
     return {
@@ -324,7 +328,7 @@ export default function ModelViewer({
       // keeps one more cell away from it than from a traced outline.
       edgeMarginInches: outline ? 0 : (halfW * 2) / (data.width - 1),
     };
-  }, [layerCount, bbox, data, shape, widthInches, heightInches, rotation, outlineInputs, outline, resort, showRuns, showLifts, minRunWidthMm, areaId, colorScheme]);
+  }, [layerCount, bbox, data, shape, widthInches, heightInches, rotation, outlineInputs, traced, outline, resort, showRuns, showLifts, minRunWidthMm, areaId, colorScheme]);
 
   const inlayColors = useMemo(() => {
     const colors = new Map<string, Rgb>([[LIFT_COLOR.name, LIFT_COLOR.rgb]]);

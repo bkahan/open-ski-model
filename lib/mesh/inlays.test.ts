@@ -31,6 +31,8 @@ const SIZE_IN = 6;
 const BASE_IN = 0.25;
 const bbox: Bbox = [-72.53, 44.91, -72.47, 44.95];
 const footprint = shapeOutline("rectangle", SIZE_IN, SIZE_IN, 0);
+/** A ten-thousandth of a square millimeter: nothing a printer could show. */
+const CLIPPING_NOISE_IN2 = 1e-4 * MM * MM;
 
 function hill(size: number): ElevationResponse {
   const heights: number[] = [];
@@ -88,10 +90,6 @@ function freePlans(plans: ColorPlan[]) {
   for (const { section } of plans) section.delete();
 }
 
-function areaOf(section: CrossSection): number {
-  return section.area();
-}
-
 /** Area of the parts of `section` narrower than `widthIn`. */
 function thinArea(section: CrossSection, widthIn: number): number {
   const shrunk = section.offset(-widthIn / 2, "Round", 2, 12);
@@ -113,7 +111,7 @@ describe("planColors", () => {
     for (let a = 0; a < plans.length; a++) {
       for (let b = a + 1; b < plans.length; b++) {
         const both = plans[a].section.intersect(plans[b].section);
-        expect(areaOf(both)).toBeLessThan(1e-9);
+        expect(both.area()).toBeLessThan(CLIPPING_NOISE_IN2);
         both.delete();
       }
     }
@@ -128,15 +126,70 @@ describe("planColors", () => {
   });
 
   it("stops color short of the model's edge", () => {
-    const plans = planColors(m, footprint, { groups: resort });
-    const lift = plans[0].section.bounds();
-    expect(lift.min[1]).toBeGreaterThan(-SIZE_IN / 2 + 0.79 * MM);
-    expect(lift.max[1]).toBeLessThan(SIZE_IN / 2 - 0.79 * MM);
+    // A lift drawn right off both ends of the model.
+    const overshoot: InlayGroup[] = [{ key: "lift", paths: [line([0, -3.5], [0, 3.5], 1.2)] }];
+    const edge = SIZE_IN / 2;
+
+    const plans = planColors(m, footprint, { groups: overshoot });
+    const kept = plans[0].section.bounds();
+    expect(kept.min[1]).toBeCloseTo(-edge + 0.8 * MM, 3);
+    expect(kept.max[1]).toBeCloseTo(edge - 0.8 * MM, 3);
     freePlans(plans);
 
-    const wider = planColors(m, footprint, { groups: resort, edgeMarginInches: 1 * MM });
-    expect(wider[0].section.bounds().max[1]).toBeLessThan(SIZE_IN / 2 - 1.79 * MM);
+    const wider = planColors(m, footprint, { groups: overshoot, edgeMarginInches: 1 * MM });
+    const narrowed = wider[0].section.bounds();
+    expect(narrowed.min[1]).toBeCloseTo(-edge + 1.8 * MM, 3);
+    expect(narrowed.max[1]).toBeCloseTo(edge - 1.8 * MM, 3);
     freePlans(wider);
+  });
+
+  it("ignores groups and paths with nothing in them", () => {
+    const plans = planColors(m, footprint, {
+      groups: [
+        { key: "black", paths: [] },
+        { key: "blue", paths: [{ points: [], halfWidth: 0.6 * MM }] },
+        { key: "green", paths: [line([-2, 0], [2, 0], 1.2)] },
+      ],
+    });
+    expect(plans.map((p) => p.key)).toEqual(["green"]);
+    freePlans(plans);
+    const none = planColors(m, footprint, { groups: [] });
+    expect(none).toHaveLength(0);
+  });
+
+  it("keeps every region printable and apart on a crowded mountain", () => {
+    // Deterministic scatter: five colors, twelve short runs each, crossing freely.
+    let seed = 7;
+    const random = () => {
+      seed = (seed * 16807) % 2147483647;
+      return seed / 2147483647;
+    };
+    const crowded: InlayGroup[] = ["lift", "black", "red", "blue", "green"].map((key) => ({
+      key,
+      paths: Array.from({ length: 12 }, () => {
+        const x = random() * 3 - 1.5;
+        const z = random() * 3 - 1.5;
+        const a = random() * Math.PI * 2;
+        return line([x, z], [x + Math.cos(a) * 1.2, z + Math.sin(a) * 1.2], 1.2 + random());
+      }),
+    }));
+    const plans = planColors(m, footprint, { groups: crowded });
+    expect(plans.length).toBeGreaterThan(3);
+    for (const { section } of plans) {
+      const regions = section.decompose();
+      for (const region of regions) {
+        expect(region.area()).toBeGreaterThan(0.99 * MM * MM);
+        region.delete();
+      }
+    }
+    for (let a = 0; a < plans.length; a++) {
+      for (let b = a + 1; b < plans.length; b++) {
+        const both = plans[a].section.intersect(plans[b].section);
+        expect(both.area()).toBeLessThan(CLIPPING_NOISE_IN2);
+        both.delete();
+      }
+    }
+    freePlans(plans);
   });
 
   it("drops a color too narrow to print", () => {
@@ -153,7 +206,7 @@ describe("planColors", () => {
   it("leaves no color region narrower than two nozzle lines", () => {
     const plans = planColors(m, footprint, { groups: resort });
     for (const { section } of plans) {
-      expect(thinArea(section, 0.7 * MM) / areaOf(section)).toBeLessThan(0.01);
+      expect(thinArea(section, 0.7 * MM) / section.area()).toBeLessThan(0.01);
     }
     freePlans(plans);
   });
@@ -169,7 +222,7 @@ describe("planColors", () => {
     // One piece, and the gap's area has gone to a color.
     const pieces = merged.decompose();
     expect(pieces).toHaveLength(1);
-    expect(areaOf(merged)).toBeGreaterThan(4 * (2 * 1.2 + gapMm) * MM * 0.99);
+    expect(merged.area()).toBeGreaterThan(4 * (2 * 1.2 + gapMm) * MM * 0.99);
     for (const piece of pieces) piece.delete();
     merged.delete();
     freePlans(plans);
@@ -249,7 +302,7 @@ describe("inlayTerrain", () => {
     const { terrain: white, inlays } = inlayTerrain(m, terrain, footprint, { groups: resort });
     inlays.forEach(({ solid }, i) => {
       // A pocket follows the surface straight down, so its volume is plan area times depth.
-      expect(solid.volume()).toBeCloseTo(areaOf(plans[i].section) * INLAY_DEPTH_IN, 5);
+      expect(solid.volume()).toBeCloseTo(plans[i].section.area() * INLAY_DEPTH_IN, 5);
       expect(solid.boundingBox().max[1]).toBeLessThanOrEqual(terrain.boundingBox().max[1] + 1e-6);
       expect(solid.boundingBox().min[1]).toBeGreaterThan(BASE_IN - INLAY_DEPTH_IN - 1e-6);
     });
@@ -311,8 +364,7 @@ describe("buildModelSolids with inlays", () => {
     expect(built.grooveInlays.map((i) => i.key)).toEqual(["lift", "black", "blue"]);
     for (const { solid } of built.grooveInlays) {
       const box = solid.boundingBox();
-      expect(Math.hypot(box.max[0], 0)).toBeLessThan(2 - 0.79 * MM);
-      expect(box.max[2]).toBeLessThan(2 - 0.79 * MM);
+      expect(Math.max(-box.min[0], box.max[0], -box.min[2], box.max[2])).toBeLessThan(2 - 0.79 * MM);
     }
     free([built.terrain, ...built.grooveInlays.map((i) => i.solid)]);
   });
