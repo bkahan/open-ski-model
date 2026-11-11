@@ -7,6 +7,7 @@
 //   /?b=-122.97,50.10,-122.91,50.14&s=8x6&t=0.25&rh=2&label=Whistler
 
 import { isColorSchemeSetting, type ColorSchemeSetting } from "@/lib/resort/colors";
+import { PLACE_MAX_CHARS } from "@/lib/resort/place";
 import { DEFAULT_RESORT_SETTINGS } from "@/lib/resort/settings";
 import type { Shape } from "@/lib/shape";
 import type { Bbox } from "@/lib/types";
@@ -108,7 +109,7 @@ export function decodeUrlState(params: URLSearchParams): Partial<UrlState> {
   if (rh && Number.isFinite(Number(rh)) && Number(rh) > 0) out.reliefInches = Number(rh);
   const label = params.get("label");
   if (label) out.label = label;
-  const place = params.get("place");
+  const place = params.get("place")?.trim().slice(0, PLACE_MAX_CHARS);
   if (place) out.place = place;
 
   return out;

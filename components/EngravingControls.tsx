@@ -1,5 +1,7 @@
 "use client";
 
+import { PLACE_MAX_CHARS } from "@/lib/resort/place";
+
 // Engraving toggles:
 //   - "Label + compass": adds a beveled plinth around the model and
 //     engraves the place name plus a compass rose on
@@ -17,11 +19,18 @@ interface Props {
   /** Second line of the name plate; empty for a one-line plate. */
   place: string;
   onPlaceChange: (place: string) => void;
+  /** The field took focus: a town still being looked up must not replace what gets typed. */
+  onPlaceEditStart: () => void;
 }
 
-const PLACE_MAX_CHARS = 60;
-
-export default function EngravingControls({ label, brand, onChange, place, onPlaceChange }: Props) {
+export default function EngravingControls({
+  label,
+  brand,
+  onChange,
+  place,
+  onPlaceChange,
+  onPlaceEditStart,
+}: Props) {
   // Typing doesn't rebuild the model letter by letter: the line is taken
   // when the field is left or Enter is pressed.
   const commitPlace = (value: string) => {
@@ -58,6 +67,7 @@ export default function EngravingControls({ label, brand, onChange, place, onPla
             defaultValue={place}
             placeholder="Jay, VT"
             maxLength={PLACE_MAX_CHARS}
+            onFocus={onPlaceEditStart}
             onBlur={(e) => commitPlace(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") e.currentTarget.blur();

@@ -52,6 +52,17 @@ no visible text. Replacing both:
   multicolor export.
 - E3 (done): STL/STEP export from the Manifold union of terrain and
   plinth. Babylon CSG and the raised-text fallback are gone.
+- E4 (done): a second line under the name for the town and state
+  ("Jay, VT", "Zermatt, Switzerland"). The name is capped at 30% of the
+  slope, the second line is 62% of that (never under 3 mm), both
+  left-aligned, and the rose
+  sits to their right, centered on the pair. The second line is the first
+  thing given up: a plate too short for both lines is laid out exactly as
+  it was with one. Picking a resort fills the line from the ski-area
+  index, then replaces it with a Nominatim reverse lookup at the base
+  area (the lift station most runs finish at), since the index's town is
+  often a hamlet or the next town over. The line is editable and travels
+  in the link as `place`.
 
 ### Print sizing (done)
 

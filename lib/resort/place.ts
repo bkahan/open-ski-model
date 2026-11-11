@@ -1,10 +1,10 @@
 // The second line of the name plate: the town a resort is in and its state
 // or country, as in "Jay, VT" or "Zermatt, Switzerland".
 //
-// The ski-area index carries a town for about four resorts in ten. For the
-// rest the town is looked up at the resort's base area, which is where its
-// address is, and not at the middle of the mountain, which often lies in
-// the next town over.
+// The ski-area index carries a town for about four resorts in ten, and it is
+// often a hamlet or the next town over. So the town is looked up at the
+// resort's base area, which is where its address is, and not at the middle
+// of the mountain.
 
 import type { ResortData } from "@/lib/resort/types";
 import type { LngLat } from "@/lib/types";
@@ -15,9 +15,11 @@ const REVERSE_ZOOM = "13";
 const METERS_PER_DEG_LAT = 111_320;
 /** How near a run must start or end to count toward a lift station. */
 const STATION_REACH_M = 150;
+/** The longest second line the plate's field and a share link will carry. */
+export const PLACE_MAX_CHARS = 60;
 
 /** States and provinces are abbreviated; every other region is spelled out. */
-const REGION_CODES: Record<string, string> = {
+const REGION_CODES = new Map(Object.entries({
   Alabama: "AL", Alaska: "AK", Arizona: "AZ", Arkansas: "AR", California: "CA",
   Colorado: "CO", Connecticut: "CT", Delaware: "DE", "District of Columbia": "DC",
   Florida: "FL", Georgia: "GA", Hawaii: "HI", Idaho: "ID", Illinois: "IL",
@@ -33,7 +35,7 @@ const REGION_CODES: Record<string, string> = {
   "Newfoundland and Labrador": "NL", "Northwest Territories": "NT", "Nova Scotia": "NS",
   Nunavut: "NU", Ontario: "ON", "Prince Edward Island": "PE", Quebec: "QC",
   Saskatchewan: "SK", Yukon: "YT",
-};
+}));
 
 const ABBREVIATING_COUNTRIES = new Set(["US", "CA"]);
 
@@ -50,7 +52,7 @@ export function placeLine(parts: PlaceParts): string {
   const { town, region, country, countryCode } = parts;
   if (countryCode && ABBREVIATING_COUNTRIES.has(countryCode)) {
     // Without a town the state stands alone, and reads better spelled out.
-    const state = town && region ? (REGION_CODES[region] ?? region) : region;
+    const state = town && region ? (REGION_CODES.get(region) ?? region) : region;
     return [town, state].filter(Boolean).join(", ");
   }
   return [town ?? region, country].filter(Boolean).join(", ");
@@ -65,10 +67,33 @@ export function placeFromIndex(location: string | null, countryCode: string | nu
   return { town, region, country, countryCode: countryCode?.toUpperCase() ?? null };
 }
 
+const ADDRESS_FIELDS = [
+  "city",
+  "town",
+  "village",
+  "municipality",
+  "state",
+  "province",
+  "country",
+  "country_code",
+] as const;
+
 /** The address object of a Nominatim reverse lookup. */
-export type NominatimAddress = Partial<
-  Record<"city" | "town" | "village" | "municipality" | "state" | "province" | "country" | "country_code", string>
->;
+export type NominatimAddress = Partial<Record<(typeof ADDRESS_FIELDS)[number], string>>;
+
+/** The address in a reverse lookup's reply, keeping only the fields that are text. */
+function addressIn(body: unknown): NominatimAddress | null {
+  if (typeof body !== "object" || body === null || !("address" in body)) return null;
+  const raw = body.address;
+  if (typeof raw !== "object" || raw === null) return null;
+  const fields: Record<string, unknown> = { ...raw };
+  const address: NominatimAddress = {};
+  for (const field of ADDRESS_FIELDS) {
+    const value = fields[field];
+    if (typeof value === "string" && value.trim()) address[field] = value.trim();
+  }
+  return address;
+}
 
 /** Hamlets and neighborhoods are passed over: the plate wants the town they belong to. */
 export function placeFromNominatim(address: NominatimAddress): PlaceParts {
@@ -92,8 +117,9 @@ export async function lookupPlace(point: LngLat, signal?: AbortSignal): Promise<
   });
   const res = await fetch(`${REVERSE_URL}?${params}`, { signal, headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`Nominatim reverse lookup failed: HTTP ${res.status}`);
-  const body = (await res.json()) as { address?: NominatimAddress };
-  return body.address ? placeFromNominatim(body.address) : null;
+  const body: unknown = await res.json();
+  const address = addressIn(body);
+  return address ? placeFromNominatim(address) : null;
 }
 
 function metersBetween(a: LngLat, b: LngLat): number {
@@ -131,8 +157,11 @@ export function resortBasePoint(resort: ResortData, areaId: string): LngLat | nu
   }
   if (base) return base;
 
-  // No lift gathers runs: fall back to where the runs finish on average.
-  const lng = ends.reduce((sum, end) => sum + end[0], 0) / ends.length;
-  const lat = ends.reduce((sum, end) => sum + end[1], 0) / ends.length;
-  return [lng, lat];
+  // No lift gathers runs: take the run end nearest where they finish on
+  // average. The average itself can fall between two base areas.
+  const mean: LngLat = [
+    ends.reduce((sum, end) => sum + end[0], 0) / ends.length,
+    ends.reduce((sum, end) => sum + end[1], 0) / ends.length,
+  ];
+  return ends.reduce((nearest, end) => (metersBetween(end, mean) < metersBetween(nearest, mean) ? end : nearest));
 }

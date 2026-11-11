@@ -322,29 +322,9 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [bbox, resort, resortLoading, resortSettings.showRuns, loadResort]);
 
-  // --- The picked resort's town, for the name plate's second line ---
-  // Waits for the resort's lines, which say where its base area is, then
-  // asks once. Typing in the field cancels it.
+  // The resort whose town is still being looked up for the plate's second
+  // line. A newer pick, or the user going to edit the line, drops it.
   const placeLookupRef = useRef<string | null>(null);
-  useEffect(() => {
-    const id = placeLookupRef.current;
-    if (!id || id !== areaId || !resort) return;
-    const base = resortBasePoint(resort, id);
-    if (!base) return;
-    const ctrl = new AbortController();
-    lookupPlace(base, ctrl.signal)
-      .then((parts) => {
-        if (placeLookupRef.current !== id) return;
-        placeLookupRef.current = null;
-        if (parts?.town) setPlace(placeLine(parts));
-      })
-      .catch((err: unknown) => {
-        if (ctrl.signal.aborted) return;
-        placeLookupRef.current = null;
-        console.warn("[place] lookup failed", err);
-      });
-    return () => ctrl.abort();
-  }, [resort, areaId]);
 
   // Latest bbox for async handlers that must not clobber newer edits.
   const bboxRef = useRef<Bbox | null>(bbox);
@@ -417,8 +397,9 @@ export default function Home() {
     frameRotation: number,
     widthInches: number,
     heightInches: number,
+    lines: Promise<ResortData>,
   ) => {
-    const data = await fetchResort(resortFetchArea(result.bbox));
+    const data = await lines;
     if (bboxRef.current !== initialBbox) return;
     const frame = frameAroundResort(data, result.id, frameRotation, RESORT_OUTLINE_PADDING);
     if (!frame) return;
@@ -435,10 +416,24 @@ export default function Home() {
     setFlyTo(frame.center);
   };
 
+  /**
+   * Looks the picked resort's town up, once: at its base area when its
+   * lines say where that is, at its center when they don't or didn't load.
+   */
+  const fillPlace = async (result: SearchResult, lines: Promise<ResortData>) => {
+    const data = await lines.catch(() => null);
+    if (placeLookupRef.current !== result.id) return;
+    const point = (data && resortBasePoint(data, result.id)) ?? result.center;
+    const parts = await lookupPlace(point);
+    if (placeLookupRef.current !== result.id) return;
+    placeLookupRef.current = null;
+    if (parts?.town) setPlace(placeLine(parts));
+  };
+
   const handleSearch = (result: SearchResult) => {
     setLabel(result.name);
     // The index's own idea of the place shows at once. Its towns are often
-    // a hamlet or the next town over, so the lookup below replaces it.
+    // a hamlet or the next town over, so fillPlace replaces it.
     setPlace(result.kind === "resort" ? placeLine(placeFromIndex(result.location ?? null, result.countryCode ?? null)) : "");
     placeLookupRef.current = result.kind === "resort" ? result.id : null;
     setFlyTo(result.center);
@@ -463,9 +458,14 @@ export default function Home() {
       const [hW, hH] = shapeAABBHalf("rectangle", widthInches, heightInches, nextRotation);
       const viewport = snapBboxToAspect(scaleBbox(result.bbox, RESORT_FRAME_PADDING), hW / hH, 0);
       setBbox(viewport);
-      fitFrameToResort(result, viewport, nextRotation, widthInches, heightInches).catch((err) =>
+      const lines = fetchResort(resortFetchArea(result.bbox));
+      fitFrameToResort(result, viewport, nextRotation, widthInches, heightInches, lines).catch((err) =>
         console.error("[resort-frame]", err),
       );
+      fillPlace(result, lines).catch((err: unknown) => {
+        if (placeLookupRef.current === result.id) placeLookupRef.current = null;
+        console.warn("[place] lookup failed", err);
+      });
       return;
     }
 
@@ -741,6 +741,9 @@ export default function Home() {
             setEngraveBrand(b);
           }}
           place={place}
+          onPlaceEditStart={() => {
+            placeLookupRef.current = null;
+          }}
           onPlaceChange={(next) => {
             placeLookupRef.current = null;
             setPlace(next);

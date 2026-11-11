@@ -51,7 +51,11 @@ box, get a watertight `.stl` you can hand to your slicer.
 - **Optional plinth + engravings.**
   - *Label + compass:* a beveled plinth wraps the model and the place
     name + an N/E/S/W compass rose are inlaid into the rim on the base
-    side, tilted 35° so they face up on a desk.
+    side, tilted 35° so they face up on a desk. A second, smaller line
+    under the name takes the town and state ("Jay, VT"), with the rose
+    beside the pair. Picking a resort fills it in: from the ski-area index
+    at once, then from an OpenStreetMap (Nominatim) lookup at the resort's
+    base area. Edit it, or clear it for one line.
   - *Brand on bottom:* `craftedcarving.com` engraved into the bottom
     face. Independent toggle.
 
@@ -191,7 +195,7 @@ are fused in by position dedup so the export stays a single solid.
 ## URL state
 
 ```
-/?b=W,S,E,N&sh=shape&r=rot&s=WxH&lk=1&g=grid&el=1&eb=0&t=baseInches&v=exag&label=Name
+/?b=W,S,E,N&sh=shape&r=rot&s=WxH&lk=1&g=grid&el=1&eb=0&t=baseInches&v=exag&label=Name&place=Town
 ```
 
 | Key     | Meaning                                                |
@@ -213,6 +217,7 @@ are fused in by position dedup so the export stays a single solid.
 | `mw`    | minimum run width in mm (omitted at the default 1.2)   |
 | `cs`    | trail color scheme `na` \| `eu` (omitted when auto)    |
 | `label` | display name (URL-encoded)                             |
+| `place` | second line of the name plate, e.g. `Jay, VT` (omitted when empty) |
 
 Example:
 
@@ -253,6 +258,7 @@ lib/
   resort/
     skidata.ts             Data-branch cell reader + ski-area search (server)
     request.ts             /api/resort request validation
+    place.ts               Town + state for the name plate's second line
     colors.ts              Difficulty → color per scheme
     geojson.ts             Resort data → GeoJSON for the map
     settings.ts            Run settings defaults + limits

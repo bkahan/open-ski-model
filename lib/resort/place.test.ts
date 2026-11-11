@@ -92,6 +92,29 @@ describe("lookupPlace", () => {
     expect(url.searchParams.get("accept-language")).toBe("en");
   });
 
+  it("passes the caller's signal on and ignores fields that aren't text", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      Response.json({ address: { town: " Stowe ", state: 50, country: null, country_code: "us" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const ctrl = new AbortController();
+    expect(await lookupPlace([-72.7, 44.5], ctrl.signal)).toEqual({
+      town: "Stowe",
+      region: null,
+      country: null,
+      countryCode: "US",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(ctrl.signal);
+  });
+
+  it("gives null for a reply that isn't an address", async () => {
+    for (const body of [null, "busy", { address: "Vermont" }, { address: null }]) {
+      vi.stubGlobal("fetch", vi.fn(async () => Response.json(body)));
+      expect(await lookupPlace([0, 0])).toBeNull();
+    }
+  });
+
   it("gives null for a point with no address and throws on a failed request", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Unable to geocode" })));
     expect(await lookupPlace([0, 0])).toBeNull();
@@ -148,10 +171,25 @@ describe("resortBasePoint", () => {
     expect(base).toEqual(upperBase);
   });
 
-  it("uses where the runs finish when no lift gathers them", () => {
-    const base = resortBasePoint(resortOf([run("1", summit, mainBase), run("2", summit, mainBase)], []), AREA);
-    expect(base?.[0]).toBeCloseTo(mainBase[0], 9);
-    expect(base?.[1]).toBeCloseTo(mainBase[1], 9);
+  it("passes over a mid-station that more runs leave than reach", () => {
+    const mid: LngLat = [-72.51, 44.935];
+    const runs = [
+      run("1", summit, mid),
+      run("2", summit, mid),
+      run("3", summit, mid),
+      run("4", mid, mainBase),
+      run("5", mid, mainBase),
+      run("6", mid, upperBase),
+      run("7", mid, upperBase),
+    ];
+    const lifts = [lift("a", mainBase, mid), lift("b", mid, summit)];
+    expect(resortBasePoint(resortOf(runs, lifts), AREA)).toEqual(mainBase);
+  });
+
+  it("uses a run's end, the one nearest where they finish, when no lift gathers them", () => {
+    const farBase: LngLat = [-72.48, 44.95];
+    const runs = [run("1", summit, mainBase), run("2", summit, mainBase), run("3", summit, farBase)];
+    expect(resortBasePoint(resortOf(runs, []), AREA)).toEqual(mainBase);
   });
 
   it("gives null when the loaded data is for another ski area", () => {

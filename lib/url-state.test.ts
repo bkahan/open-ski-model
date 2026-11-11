@@ -43,6 +43,12 @@ describe("model height url state", () => {
     expect(decodeUrlState(new URLSearchParams(params.toString())).place).toBe("Carrabassett Valley, ME");
   });
 
+  it("trims a second line from a link and cuts it to the field's length", () => {
+    expect(decodeUrlState(new URLSearchParams("place=%20%20")).place).toBeUndefined();
+    expect(decodeUrlState(new URLSearchParams("place=%20Jay,%20VT%20")).place).toBe("Jay, VT");
+    expect(decodeUrlState(new URLSearchParams({ place: "x".repeat(200) })).place).toHaveLength(60);
+  });
+
   it("round-trips the ski area id", () => {
     expect(encodeUrlState(base).has("ra")).toBe(false);
     expect(decodeUrlState(encodeUrlState({ ...base, areaId: "abc123" })).areaId).toBe("abc123");
