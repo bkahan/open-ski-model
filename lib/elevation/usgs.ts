@@ -36,6 +36,29 @@ export function bboxLikelyInUS(b: Bbox): boolean {
   );
 }
 
+/**
+ * Query for one square grid covering exactly `bbox`. Left to itself the
+ * server widens the extent until its pixels are square in degrees, which
+ * away from the equator returns more ground north to south than was asked
+ * for (41% more at 45°N). Squeezed into the frame, that puts every summit
+ * closer to the middle than the runs drawn over it.
+ */
+export function usgsExportParams(bbox: Bbox, gridSize: number): URLSearchParams {
+  const [w, s, e, n] = bbox;
+  return new URLSearchParams({
+    bbox: `${w},${s},${e},${n}`,
+    bboxSR: "4326",
+    imageSR: "4326",
+    size: `${gridSize},${gridSize}`,
+    adjustAspectRatio: "false",
+    format: "tiff",
+    pixelType: "F32",
+    f: "image",
+    interpolation: "RSP_BilinearInterpolation",
+    noDataInterpretation: "esriNoDataMatchAny",
+  });
+}
+
 export async function buildHeightGridUSGS(
   bbox: Bbox,
   gridSize: number,
@@ -43,18 +66,7 @@ export async function buildHeightGridUSGS(
   if (gridSize < 16 || gridSize > 512) {
     throw new Error(`gridSize must be 16..512, got ${gridSize}`);
   }
-  const [w, s, e, n] = bbox;
-  const params = new URLSearchParams({
-    bbox: `${w},${s},${e},${n}`,
-    bboxSR: "4326",
-    imageSR: "4326",
-    size: `${gridSize},${gridSize}`,
-    format: "tiff",
-    pixelType: "F32",
-    f: "image",
-    interpolation: "RSP_BilinearInterpolation",
-    noDataInterpretation: "esriNoDataMatchAny",
-  });
+  const params = usgsExportParams(bbox, gridSize);
 
   const res = await fetch(`${EXPORT_URL}?${params}`, {
     cache: "force-cache",
