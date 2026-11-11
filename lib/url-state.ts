@@ -6,7 +6,6 @@
 //   /?b=-72.520,44.910,-72.480,44.950&s=6x6&t=0.25&rh=1.25&label=Jay%20Peak
 //   /?b=-122.97,50.10,-122.91,50.14&s=8x6&t=0.25&rh=2&label=Whistler
 
-import { MAX_LAYER_COUNT, MIN_LAYER_COUNT } from "@/lib/mesh/layers";
 import { isColorSchemeSetting, type ColorSchemeSetting } from "@/lib/resort/colors";
 import { DEFAULT_RESORT_SETTINGS } from "@/lib/resort/settings";
 import type { Shape } from "@/lib/shape";
@@ -17,7 +16,6 @@ export interface UrlState {
   shape: Shape;
   silhouette: boolean;
   areaId: string | null;
-  layerCount: number;
   rotation: number;
   widthInches: number;
   heightInches: number;
@@ -43,7 +41,6 @@ export function encodeUrlState(s: UrlState): URLSearchParams {
   params.set("sh", s.shape);
   if (s.silhouette) params.set("ol", "1");
   if (s.areaId) params.set("ra", s.areaId);
-  if (s.layerCount > 0) params.set("ln", String(s.layerCount));
   if (s.rotation !== 0) params.set("r", trim(s.rotation));
   if (s.aspectLocked) params.set("lk", "1");
   if (s.gridSize !== 256) params.set("g", String(Math.round(s.gridSize)));
@@ -87,10 +84,6 @@ export function decodeUrlState(params: URLSearchParams): Partial<UrlState> {
   if (params.get("ol") === "1") out.silhouette = true;
   const ra = params.get("ra");
   if (ra) out.areaId = ra;
-  const ln = Number(params.get("ln"));
-  if (Number.isInteger(ln) && ln >= MIN_LAYER_COUNT && ln <= MAX_LAYER_COUNT) {
-    out.layerCount = ln;
-  }
   const r = params.get("r");
   if (r && Number.isFinite(Number(r))) out.rotation = Number(r);
   if (params.get("lk") === "1") out.aspectLocked = true;

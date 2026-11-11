@@ -80,7 +80,7 @@ box, get a watertight `.stl` you can hand to your slicer.
   [OpenSkiData](https://openskidata.org) (OpenSkiMap's processed OSM
   data), rebuilt weekly by a GitHub Action into 1° cells on the `data`
   branch and served through jsDelivr, so no query server sits in the
-  request path. They're drawn on the map and draped on the 3D terrain,
+  request path. They're drawn on the map and set into the 3D terrain,
   colored by difficulty. The search box lists ski resorts from the same
   dataset; picking one turns and fits the frame to the resort's natural
   viewport. Trail colors follow the convention the data was tagged under
@@ -208,7 +208,6 @@ are fused in by position dedup so the export stays a single solid.
 | `rh`    | model height, base to peak, in inches                  |
 | `ol`    | `1` to cut the model to the resort's outline           |
 | `ra`    | ski area id, keeps neighbors out of the outline        |
-| `ln`    | stacked finish: number of steps (omitted when smooth)  |
 | `runs`  | `0` to hide ski runs (on by default)                   |
 | `lf`    | `0` to hide lifts (on by default)                      |
 | `mw`    | minimum run width in mm (omitted at the default 1.2)   |
@@ -268,10 +267,10 @@ lib/mesh/
     nameplate.ts           Glyph placement on the chamfer, font fitting
     compass.ts             Compass rose outlines
     silhouette.ts          Resort outline, slab and name tab
-    layers.ts              Stacked finish: flat elevation steps
+    inlays.ts              Runs + lifts as flush color bodies, one per filament
     text.ts                Font loading, glyph outlines, text solids
     watertight.ts          Build closed VertexData from height grid
-    runs.ts                Drape runs + lifts as ribbons, one per color
+    runs.ts                Runs + lifts on the model plane, grouped by color
     contours.ts            Marching squares contour lines
     plinth.ts              Beveled plinth around the model
     compass.ts             North-arrow indicator geometry

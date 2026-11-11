@@ -52,7 +52,7 @@ const TAB_MIN_LENGTH_IN = 2.25;
 const TAB_MIN_USABLE_IN = 2.5;
 const SLAB_ROUNDING_IN = 3 / MM_PER_INCH;
 
-function signedArea(ring: Contour): number {
+export function signedArea(ring: Contour): number {
   let sum = 0;
   for (let i = 0; i < ring.length; i++) {
     const [ax, ay] = ring[i];
@@ -174,8 +174,8 @@ export function buildResortOutline(
 
 /**
  * Point-in-outline test snapped to the elevation grid, filled by scanline.
- * Contour lines and run ribbons ask this for every cell and sample, which
- * would be too slow against the polygon itself.
+ * Contour lines ask this for every cell, which would be too slow against
+ * the polygon itself.
  */
 export function outlineMask(
   outline: Contour,
@@ -213,7 +213,7 @@ export function outlineMask(
 }
 
 /** Extrude plane contours straight up from y = 0. */
-function prismFromSection(section: CrossSection, height: number): Manifold {
+export function prismFromSection(section: CrossSection, height: number): Manifold {
   // A section's y becomes -z when stood up, so z is negated going in.
   const mirrored = section.scale([1, -1]);
   try {

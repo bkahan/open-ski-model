@@ -22,7 +22,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import DensityControls from "@/components/DensityControls";
 import EngravingControls from "@/components/EngravingControls";
-import FinishControls from "@/components/FinishControls";
 import ResortControls from "@/components/ResortControls";
 import SearchBar from "@/components/SearchBar";
 import ShapeControls from "@/components/ShapeControls";
@@ -180,7 +179,6 @@ export default function Home() {
   const [shape, setShape] = useState<Shape>("rectangle");
   const [silhouette, setSilhouette] = useState(false);
   const [areaId, setAreaId] = useState<string | null>(null);
-  const [layerCount, setLayerCount] = useState(0);
   const [rotation, setRotation] = useState(0);
   const [gridSize, setGridSize] = useState<number>(DEFAULT_GRID_SIZE);
   const [engraveLabel, setEngraveLabel] = useState<boolean>(false);
@@ -219,7 +217,6 @@ export default function Home() {
     setShape(sh);
     setSilhouette(sh === "rectangle" && (parsed.silhouette ?? false));
     setAreaId(parsed.areaId ?? null);
-    setLayerCount(parsed.layerCount ?? 0);
     setRotation(rot);
     setSize({
       widthInches: w,
@@ -263,7 +260,6 @@ export default function Home() {
         shape,
         silhouette,
         areaId,
-        layerCount,
         rotation,
         widthInches: size.widthInches,
         heightInches: size.heightInches,
@@ -278,7 +274,7 @@ export default function Home() {
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [bbox, shape, silhouette, areaId, layerCount, rotation, size, gridSize, engraveLabel, engraveBrand, resortSettings, label]);
+  }, [bbox, shape, silhouette, areaId, rotation, size, gridSize, engraveLabel, engraveBrand, resortSettings, label]);
 
   /** Fetch runs + lifts for `area`, replacing any in-flight request. */
   const loadResort = useCallback(async (area: Bbox): Promise<ResortData | null> => {
@@ -705,8 +701,6 @@ export default function Home() {
 
         <DensityControls gridSize={gridSize} onChange={setGridSize} />
 
-        <FinishControls layerCount={layerCount} onChange={setLayerCount} />
-
         <EngravingControls
           label={engraveLabel}
           brand={engraveBrand}
@@ -829,7 +823,6 @@ export default function Home() {
             resort={resort}
             silhouette={silhouette}
             areaId={areaId}
-            layerCount={layerCount}
             showRuns={resortSettings.showRuns}
             colorScheme={resolvedScheme}
             showLifts={resortSettings.showLifts}
