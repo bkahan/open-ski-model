@@ -174,8 +174,8 @@ export function buildResortOutline(
 
 /**
  * Point-in-outline test snapped to the elevation grid, filled by scanline.
- * Contour lines and run ribbons ask this for every cell and sample, which
- * would be too slow against the polygon itself.
+ * Contour lines ask this for every cell, which would be too slow against
+ * the polygon itself.
  */
 export function outlineMask(
   outline: Contour,

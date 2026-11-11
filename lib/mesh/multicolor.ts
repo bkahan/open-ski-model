@@ -6,7 +6,6 @@
 import type { Manifold, ManifoldToplevel } from "manifold-3d";
 
 import type { BuiltModel } from "./engrave";
-import type { TerrainLayers } from "./layers";
 import type { ThreeMfFilament, ThreeMfPart } from "./three-mf";
 
 const FILAMENT_COLORS: Record<string, ThreeMfFilament> = {
@@ -26,8 +25,13 @@ const FILAMENT_ORDER = Object.keys(FILAMENT_COLORS);
 const ONE_AMS_MERGES: Record<string, string> = { gray: "black", orange: "black", lift: "black" };
 const SECOND_AMS_MERGES: Record<string, string> = { lift: "gray" };
 
-/** Treeline as a share of the steps: below it, the second AMS prints forest. */
+/** Treeline as a share of the relief: below it, the second AMS prints forest. */
 const TREELINE_FRACTION = 0.6;
+
+/** Height of the treeline on terrain whose surface runs from `lowY` up to `summitY`. */
+export function treelineFor(lowY: number, summitY: number): number {
+  return lowY + TREELINE_FRACTION * (summitY - lowY);
+}
 
 /** On one AMS only three trail colors fit, so green goes where the scheme has four. */
 function oneAmsColor(key: string, usesRed: boolean): string {
@@ -40,10 +44,14 @@ export interface ColorBodies {
   filaments: ThreeMfFilament[];
 }
 
+/**
+ * `treelineY` is in the terrain's own space, before it is lifted onto the
+ * plinth. Null leaves the terrain all white, as does a single AMS.
+ */
 export function buildColorBodies(
   m: ManifoldToplevel,
   built: BuiltModel,
-  layers: TerrainLayers | null,
+  treelineY: number | null,
   secondAms: boolean,
 ): ColorBodies {
   const owned: Manifold[] = [];
@@ -59,10 +67,8 @@ export function buildColorBodies(
     };
 
     const lifted = own(built.terrain.translate([0, built.plinthHeight, 0]));
-    if (secondAms && layers) {
-      const k = Math.round((layers.levels.length - 1) * TREELINE_FRACTION);
-      const treeline = layers.levels[k] + built.plinthHeight;
-      const [upper, lower] = lifted.splitByPlane([0, 1, 0], treeline);
+    if (secondAms && treelineY !== null) {
+      const [upper, lower] = lifted.splitByPlane([0, 1, 0], treelineY + built.plinthHeight);
       add("white", own(upper));
       add("forest", own(lower));
     } else {
@@ -70,10 +76,10 @@ export function buildColorBodies(
     }
     if (built.plinth) add("white", built.plinth);
 
-    const usesRed = built.grooveInlays.some((inlay) => inlay.key === "red");
+    const usesRed = built.colorInlays.some((inlay) => inlay.key === "red");
     const colorFor = (key: string) =>
       secondAms ? (SECOND_AMS_MERGES[key] ?? key) : oneAmsColor(key, usesRed);
-    for (const inlay of built.grooveInlays) {
+    for (const inlay of built.colorInlays) {
       add(colorFor(inlay.key), own(inlay.solid.translate([0, built.plinthHeight, 0])));
     }
     for (const glyph of built.inlays) add("black", glyph);

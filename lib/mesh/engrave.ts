@@ -8,7 +8,7 @@ import type * as opentype from "opentype.js";
 
 import { shapeOutline, type Shape } from "@/lib/shape";
 
-import { inlayTerrain, type InlaySpec } from "./inlays";
+import { inlayTerrain, type ColorInlay, type InlaySpec } from "./inlays";
 import { manifoldFromMesh, withSolids, type TriMesh } from "./manifold";
 import {
   buildNameplateSolids,
@@ -18,7 +18,6 @@ import {
   type PlateSide,
 } from "./nameplate";
 import { buildPlinthSolid, plinthHeightInches } from "./plinth";
-import { type ColorInlay, stackTerrain, type TerrainLayers } from "./layers";
 import { buildOutlinePlinth, OUTLINE_PLINTH_HEIGHT_IN, outlinePrism } from "./silhouette";
 import { buildTextSolid, fontSizeForCapHeight, measureTextWidth, type Contour } from "./text";
 
@@ -37,9 +36,7 @@ export interface ModelSpec extends PlateSide {
   brand: boolean;
   /** Cut the model to this ring instead of the frame. Model plane, inches. */
   outline?: Contour | null;
-  /** Rebuild the terrain as flat steps. */
-  layers?: TerrainLayers | null;
-  /** Set runs and lifts into the smooth terrain as color bodies. Stacked terrain cuts its own. */
+  /** Set runs and lifts into the terrain as color bodies. */
   inlays?: InlaySpec | null;
 }
 
@@ -50,8 +47,8 @@ export interface BuiltModel {
   plinth: Manifold | null;
   /** Name-plate fill bodies (one per glyph + the rose), for multicolor printing. */
   inlays: Manifold[];
-  /** Run and lift fills by color, when asked for. Same space as `terrain`. */
-  grooveInlays: ColorInlay[];
+  /** Run and lift bodies by color, when asked for. Same space as `terrain`. */
+  colorInlays: ColorInlay[];
   plinthHeight: number;
   nameplate: NameplateLayout | null;
 }
@@ -98,15 +95,8 @@ export function buildModelSolids(
       terrain = cut;
     }
 
-    let grooveInlays: ColorInlay[] = [];
-    if (spec.layers) {
-      const stacked = stackTerrain(m, terrain, spec.layers);
-      own(stacked.terrain);
-      for (const inlay of stacked.inlays) own(inlay.solid);
-      release(terrain);
-      terrain = stacked.terrain;
-      grooveInlays = stacked.inlays;
-    } else if (spec.inlays) {
+    let colorInlays: ColorInlay[] = [];
+    if (spec.inlays) {
       const footprint =
         outline ?? shapeOutline(spec.shape, spec.widthInches, spec.heightInches, spec.rotation);
       const inlaid = inlayTerrain(m, terrain, footprint, spec.inlays);
@@ -114,7 +104,7 @@ export function buildModelSolids(
       for (const inlay of inlaid.inlays) own(inlay.solid);
       release(terrain);
       terrain = inlaid.terrain;
-      grooveInlays = inlaid.inlays;
+      colorInlays = inlaid.inlays;
     }
 
     let brandSpin = spec.rotation + plateTurnDeg(spec);
@@ -164,7 +154,7 @@ export function buildModelSolids(
       }
     }
 
-    return { terrain, plinth, inlays, grooveInlays, plinthHeight, nameplate };
+    return { terrain, plinth, inlays, colorInlays, plinthHeight, nameplate };
   } catch (err) {
     for (const s of owned) s.delete();
     throw err;

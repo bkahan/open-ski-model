@@ -339,11 +339,11 @@ describe("buildModelSolids with inlays", () => {
       brand: true,
       inlays: { groups: resort },
     });
-    expect(built.grooveInlays.map((i) => i.key)).toEqual(["lift", "black", "blue", "green"]);
+    expect(built.colorInlays.map((i) => i.key)).toEqual(["lift", "black", "blue", "green"]);
     const plain = hillTerrain();
     expect(built.terrain.volume()).toBeLessThan(plain.volume());
     expect(built.terrain.status()).toBe("NoError");
-    free([plain, built.terrain, ...built.inlays, ...built.grooveInlays.map((i) => i.solid)]);
+    free([plain, built.terrain, ...built.inlays, ...built.colorInlays.map((i) => i.solid)]);
     built.plinth?.delete();
   });
 
@@ -361,11 +361,11 @@ describe("buildModelSolids with inlays", () => {
       inlays: { groups: resort },
     });
     // The green run lies outside the circle; the rest stop inside it.
-    expect(built.grooveInlays.map((i) => i.key)).toEqual(["lift", "black", "blue"]);
-    for (const { solid } of built.grooveInlays) {
+    expect(built.colorInlays.map((i) => i.key)).toEqual(["lift", "black", "blue"]);
+    for (const { solid } of built.colorInlays) {
       const box = solid.boundingBox();
       expect(Math.max(-box.min[0], box.max[0], -box.min[2], box.max[2])).toBeLessThan(2 - 0.79 * MM);
     }
-    free([built.terrain, ...built.grooveInlays.map((i) => i.solid)]);
+    free([built.terrain, ...built.colorInlays.map((i) => i.solid)]);
   });
 });

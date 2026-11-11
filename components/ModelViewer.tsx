@@ -37,7 +37,7 @@ import { buildContourLines } from "@/lib/mesh/contours";
 import { buildModelSolids, unionForExport, type BuiltModel, type ModelSpec } from "@/lib/mesh/engrave";
 import type { InlaySpec } from "@/lib/mesh/inlays";
 import { loadManifold, vertexDataFromManifold, type ColorAt, type TriMesh } from "@/lib/mesh/manifold";
-import { buildColorBodies } from "@/lib/mesh/multicolor";
+import { buildColorBodies, treelineFor } from "@/lib/mesh/multicolor";
 import { buildThreeMf } from "@/lib/mesh/three-mf";
 import { plateFacingDeg } from "@/lib/mesh/nameplate";
 import {
@@ -47,13 +47,7 @@ import {
 } from "@/lib/mesh/silhouette";
 import type { Contour } from "@/lib/mesh/text";
 import { plinthHeightInches } from "@/lib/mesh/plinth";
-import {
-  buildRunRibbons,
-  resortFrontBearing,
-  resortLinesOnPlane,
-  resortGrooveGroups,
-  terrainLayersFor,
-} from "@/lib/mesh/runs";
+import { resortFrontBearing, resortInlayGroups, resortLinesOnPlane } from "@/lib/mesh/runs";
 import { exportToStep } from "@/lib/mesh/step-export";
 import { loadFont } from "@/lib/mesh/text";
 import type { ElevationResponse } from "@/lib/elevation/types";
@@ -87,16 +81,13 @@ interface Props {
   silhouette: boolean;
   /** The ski area picked from search; its neighbors stay out of the outline. */
   areaId: string | null;
-  /** Stack the terrain into this many flat steps; 0 keeps it smooth. */
-  layerCount: number;
-  /** Drape the runs (and, with showLifts, the lifts) on the terrain. */
+  /** Set the runs (and, with showLifts, the lifts) into the terrain as color bodies. */
   showRuns: boolean;
   colorScheme: ColorScheme;
   showLifts: boolean;
   minRunWidthMm: number;
 }
 
-const RIBBON_LIFT_IN = 0.008;
 const EDGE_COLOR = new Color4(0.08, 0.09, 0.12, 1);
 
 function meshFromSolid(
@@ -141,7 +132,6 @@ function frameCameraOn(camera: ArcRotateCamera, built: BuiltModel, facingDeg: nu
 }
 
 const UNDERSIDE_COLOR: [number, number, number] = [0.78, 0.79, 0.82];
-const STEP_WALL_SHADE = 0.68;
 
 /**
  * Re-paint a Manifold-built terrain: surface by height, walls in the
@@ -157,28 +147,12 @@ function terrainColorAt(baseY: number, topY: number): ColorAt {
   };
 }
 
-/**
- * Stacked terrain: step and groove walls take a darker shade of their
- * height's color. The near-black of the side walls would swamp the grooves.
- */
-function stackedColorAt(baseY: number, topY: number, firstStepY: number): ColorAt {
-  const flat = terrainColorAt(baseY, topY);
-  const span = Math.max(topY - baseY, 1e-6);
-  return (x, y, z, ny) => {
-    // The outer wall runs from the base to the first step's top, so it has to
-    // stay one color all the way up or its long triangles streak.
-    if (ny > 0.3 || y < firstStepY + 1e-3) return flat(x, y, z, ny);
-    const [r, g, b] = DEFAULT_PALETTE.surface((y - baseY) / span);
-    return [r * STEP_WALL_SHADE, g * STEP_WALL_SHADE, b * STEP_WALL_SHADE];
-  };
-}
-
 function freeBuilt(built: BuiltModel | null) {
   if (!built) return;
   built.terrain.delete();
   built.plinth?.delete();
   for (const s of built.inlays) s.delete();
-  for (const inlay of built.grooveInlays) inlay.solid.delete();
+  for (const inlay of built.colorInlays) inlay.solid.delete();
 }
 
 const MM_PER_INCH = 25.4;
@@ -199,7 +173,6 @@ export default function ModelViewer({
   resort,
   silhouette,
   areaId,
-  layerCount,
   showRuns,
   colorScheme,
   showLifts,
@@ -215,7 +188,6 @@ export default function ModelViewer({
   const terrainRef = useRef<Mesh | null>(null);
   const plinthRef = useRef<Mesh | null>(null);
   const contoursRef = useRef<Mesh | null>(null);
-  const ribbonsRef = useRef<Mesh[]>([]);
   const inlaysRef = useRef<Mesh[]>([]);
   /** Solids from the last completed boolean pass; what export uses. */
   const builtRef = useRef<BuiltModel | null>(null);
@@ -297,38 +269,21 @@ export default function ModelViewer({
     return outlineMask(outline, halfW * 2, halfH * 2, data.width, data.height);
   }, [outline, shape, widthInches, heightInches, rotation, data.width, data.height]);
 
-  const layers = useMemo(() => {
-    if (layerCount === 0) return null;
-    const plane = { bbox, data, shape, widthInches, heightInches, rotation };
-    const stack = terrainLayersFor({
-      ...plane,
-      baseThicknessInches,
-      verticalExaggeration,
-      count: layerCount,
-      insideOutline,
-    });
-    if (!stack || !resort || !showRuns) return stack;
-    return {
-      ...stack,
-      grooves: resortGrooveGroups({ ...plane, resort, areaId, scheme: colorScheme, showLifts, minWidthMm: minRunWidthMm }),
-    };
-  }, [layerCount, bbox, data, shape, widthInches, heightInches, rotation, baseThicknessInches, verticalExaggeration, insideOutline, resort, showRuns, showLifts, minRunWidthMm, areaId, colorScheme]);
-
-  // On smooth terrain the runs and lifts are set in as color bodies, the
-  // same ones the 3MF carries. Not while an outline is still being traced:
-  // the build would only be thrown away.
+  // The runs and lifts are set into the terrain as color bodies, the same
+  // ones the 3MF carries. Not while an outline is still being traced: the
+  // build would only be thrown away.
   const inlays = useMemo((): InlaySpec | null => {
-    if (layerCount > 0 || !resort || !showRuns) return null;
+    if (!resort || !showRuns) return null;
     if (outlineInputs && traced?.inputs !== outlineInputs) return null;
     const plane = { bbox, data, shape, widthInches, heightInches, rotation };
     const [halfW] = shapeAABBHalf(shape, widthInches, heightInches, rotation);
     return {
-      groups: resortGrooveGroups({ ...plane, resort, areaId, scheme: colorScheme, showLifts, minWidthMm: minRunWidthMm }),
+      groups: resortInlayGroups({ ...plane, resort, areaId, scheme: colorScheme, showLifts, minWidthMm: minRunWidthMm }),
       // A frame's edge is only as exact as the elevation grid, so color
       // keeps one more cell away from it than from a traced outline.
       edgeMarginInches: outline ? 0 : (halfW * 2) / (data.width - 1),
     };
-  }, [layerCount, bbox, data, shape, widthInches, heightInches, rotation, outlineInputs, traced, outline, resort, showRuns, showLifts, minRunWidthMm, areaId, colorScheme]);
+  }, [bbox, data, shape, widthInches, heightInches, rotation, outlineInputs, traced, outline, resort, showRuns, showLifts, minRunWidthMm, areaId, colorScheme]);
 
   const inlayColors = useMemo(() => {
     const colors = new Map<string, Rgb>([[LIFT_COLOR.name, LIFT_COLOR.rgb]]);
@@ -423,7 +378,6 @@ export default function ModelViewer({
       terrainRef.current = null;
       plinthRef.current = null;
       contoursRef.current = null;
-      ribbonsRef.current = [];
       inlaysRef.current = [];
       freeBuilt(builtRef.current);
       builtRef.current = null;
@@ -522,8 +476,7 @@ export default function ModelViewer({
       cellKept,
     });
 
-    // Stacked steps are their own contour lines.
-    if (!layers && contourData.indices.length > 0) {
+    if (contourData.indices.length > 0) {
       const lines: Vector3[][] = [];
       const pos = contourData.positions;
       for (let k = 0; k < contourData.indices.length; k += 2) {
@@ -560,7 +513,6 @@ export default function ModelViewer({
       plinth: engraveLabel,
       brand: engraveBrand,
       outline,
-      layers,
       inlays,
     };
     const terrainTriMesh =
@@ -568,7 +520,7 @@ export default function ModelViewer({
         ? { positions: vertexData.positions, indices: vertexData.indices }
         : null;
     buildInputsRef.current = terrainTriMesh ? { mesh: terrainTriMesh, spec: modelSpec } : null;
-    if (engraveLabel || engraveBrand || outline || layers || inlays) {
+    if (engraveLabel || engraveBrand || outline || inlays) {
       (async () => {
         try {
           const [m, font] = await Promise.all([loadManifold(), loadFont()]);
@@ -580,16 +532,14 @@ export default function ModelViewer({
           }
           builtRef.current = built;
 
-          if ((engraveBrand && !built.plinth) || outline || layers || inlays) {
+          if ((engraveBrand && !built.plinth) || outline || inlays) {
             const topY = terrain.getBoundingInfo().boundingBox.maximum.y;
             const branded = meshFromSolid(
               scene,
               "terrain",
               built.terrain,
               terrainMat,
-              layers
-                ? stackedColorAt(baseThicknessInches, topY, layers.levels[1])
-                : terrainColorAt(baseThicknessInches, topY),
+              terrainColorAt(baseThicknessInches, topY),
               !outline,
             );
             branded.position.y = plinthTopY;
@@ -602,7 +552,7 @@ export default function ModelViewer({
             const inlayMat = inlayMatRef.current ?? plinthMat;
             fills.push(...built.inlays.map((solid, i) => meshFromSolid(scene, `inlay-${i}`, solid, inlayMat)));
           }
-          for (const { key, solid } of built.grooveInlays) {
+          for (const { key, solid } of built.colorInlays) {
             const rgb = inlayColors.get(key) ?? LIFT_COLOR.rgb;
             const body = meshFromSolid(scene, `color-${key}`, solid, terrainMat, () => rgb, false);
             body.position.y = plinthTopY;
@@ -626,73 +576,7 @@ export default function ModelViewer({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label, plateFacing, outline, insideOutline, plinthTopY, layers, inlays, inlayColors]);
-
-  // --- 2b. Runs + lifts draped on the terrain ---
-  // Separate from the terrain rebuild so toggling lifts or changing the
-  // width doesn't redo the (slow) CSG engraving. One mesh per color.
-  useEffect(() => {
-    const scene = sceneRef.current;
-    if (!scene) return;
-
-    for (const m of ribbonsRef.current) {
-      m.material?.dispose();
-      m.dispose();
-    }
-    ribbonsRef.current = [];
-    // Smooth terrain shows the color bodies themselves.
-    if (!resort || !showRuns || inlays) return;
-
-    const groups = buildRunRibbons({
-      bbox,
-      data,
-      shape,
-      widthInches,
-      heightInches,
-      rotation,
-      baseThicknessInches,
-      verticalExaggeration,
-      resort,
-      scheme: colorScheme,
-      showLifts,
-      minWidthMm: minRunWidthMm,
-      lift: RIBBON_LIFT_IN,
-      insideOutline,
-      layerLevels: layers?.levels,
-    });
-
-    ribbonsRef.current = groups.map((g) => {
-      const mat = new StandardMaterial(`run-${g.name}`, scene);
-      mat.diffuseColor = new Color3(...g.rgb);
-      mat.emissiveColor = new Color3(g.rgb[0] * 0.25, g.rgb[1] * 0.25, g.rgb[2] * 0.25);
-      mat.specularColor = new Color3(0.05, 0.05, 0.05);
-      mat.backFaceCulling = false;
-      const mesh = new Mesh(`runs-${g.name}`, scene);
-      g.vertexData.applyToMesh(mesh, false);
-      mesh.material = mat;
-      mesh.position.y = plinthTopY;
-      mesh.isPickable = false;
-      return mesh;
-    });
-  }, [
-    bbox,
-    data,
-    shape,
-    widthInches,
-    heightInches,
-    rotation,
-    baseThicknessInches,
-    verticalExaggeration,
-    plinthTopY,
-    insideOutline,
-    layers,
-    inlays,
-    resort,
-    showRuns,
-    colorScheme,
-    showLifts,
-    minRunWidthMm,
-  ]);
+  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label, plateFacing, outline, insideOutline, plinthTopY, inlays, inlayColors]);
 
   // --- 3. Toggle contour visibility without rebuilding ---
   useEffect(() => {
@@ -738,8 +622,8 @@ export default function ModelViewer({
         solid.delete();
       }
     }
-    // Without the solids this would export the uncut, unstacked block with no runs.
-    if (outlineInputs || layers || inlays) return null;
+    // Without the solids this would export the uncut block with no runs.
+    if (outlineInputs || inlays) return null;
     const positions = terrain.getVerticesData(VertexBuffer.PositionKind);
     const indices = terrain.getIndices();
     if (!positions || !indices) return null;
@@ -747,7 +631,7 @@ export default function ModelViewer({
     const lifted = Float32Array.from(positions);
     for (let i = 1; i < lifted.length; i += 3) lifted[i] += terrain.position.y;
     return { positions: lifted, indices };
-  }, [outlineInputs, layers, inlays]);
+  }, [outlineInputs, inlays]);
 
   const exportSTL = useCallback(() => {
     const scene = sceneRef.current;
@@ -788,10 +672,10 @@ export default function ModelViewer({
     (async () => {
       const [m, font] = await Promise.all([loadManifold(), loadFont()]);
       const { spec, mesh } = inputs;
-      const layersForPrint = spec.layers ? { ...spec.layers, filamentInlays: true } : null;
-      const built = buildModelSolids(m, font, mesh, { ...spec, layers: layersForPrint });
+      const built = buildModelSolids(m, font, mesh, spec);
       try {
-        const { parts, filaments } = buildColorBodies(m, built, layersForPrint, secondAms);
+        const treeline = treelineFor(baseThicknessInches, built.terrain.boundingBox().max[1]);
+        const { parts, filaments } = buildColorBodies(m, built, treeline, secondAms);
         const title = label || "Ski model";
         const blob = await buildThreeMf(title, parts, filaments);
         downloadBlob(blob, slug(title) + ".3mf");
@@ -799,7 +683,7 @@ export default function ModelViewer({
         freeBuilt(built);
       }
     })().catch((err: unknown) => console.error("[3mf] export failed", err));
-  }, [label, secondAms]);
+  }, [label, secondAms, baseThicknessInches]);
 
   return (
     <div className="relative w-full h-full">
@@ -822,17 +706,15 @@ export default function ModelViewer({
           onChange={(e) => setSunAzimuth(parseInt(e.target.value, 10))}
           className="accent-amber-400"
         />
-        {layerCount === 0 && (
-          <label className="flex items-center gap-2 mt-1">
-            <input
-              type="checkbox"
-              checked={showContours}
-              onChange={(e) => setShowContours(e.target.checked)}
-              className="accent-amber-400"
-            />
-            <span className="text-slate-300">Contour lines</span>
-          </label>
-        )}
+        <label className="flex items-center gap-2 mt-1">
+          <input
+            type="checkbox"
+            checked={showContours}
+            onChange={(e) => setShowContours(e.target.checked)}
+            className="accent-amber-400"
+          />
+          <span className="text-slate-300">Contour lines</span>
+        </label>
         <button
           type="button"
           onClick={exportSTL}
