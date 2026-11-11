@@ -45,7 +45,11 @@ function insetExtent(outlines: Contour[], inset: number): [number, number] | nul
   }
 }
 
-function holeCount(outlines: Contour[], closeBy = 0): number {
+/**
+ * Number of rings in the outlines once grown by `closeBy`. A hole that
+ * fills in takes one away; an open mouth that closes adds one.
+ */
+function ringCount(outlines: Contour[], closeBy = 0): number {
   const section = new m.CrossSection(outlines, "NonZero");
   const closed = section.offset(closeBy, "Round", 2, 32);
   try {
@@ -68,6 +72,22 @@ describe("gapBetween", () => {
     expect(gapBetween([square(0, 0)], [square(1.5, 0.2)])).toBeCloseTo(0.5, 9);
     expect(gapBetween([square(0, 0)], [square(4, 5)])).toBeCloseTo(5, 9);
   });
+
+  it("finds a corner facing the middle of a long edge, from either side", () => {
+    const wall: Contour = [
+      [2, -10],
+      [3, -10],
+      [3, 10],
+      [2, 10],
+    ];
+    expect(gapBetween([square(0, 0)], [wall])).toBeCloseTo(1, 9);
+    expect(gapBetween([wall], [square(0, 0)])).toBeCloseTo(1, 9);
+  });
+
+  it("takes the nearest of several outlines and has nothing to measure to an empty set", () => {
+    expect(gapBetween([square(0, 0), square(0, 3)], [square(0, 5.25)])).toBeCloseTo(1.25, 9);
+    expect(gapBetween([square(0, 0)], [])).toBe(Infinity);
+  });
 });
 
 describe("strokeGrowth", () => {
@@ -80,7 +100,9 @@ describe("strokeGrowth", () => {
     // neither the T's bar nor its stem is two passes wide.
     const inset = MIN_STROKE_IN / 2 - 0.01 * MM;
     expect(insetExtent(drawn, inset)).toBeNull();
-    const [width, height] = insetExtent(thickenedContours(m, drawn, grow), inset)!;
+    const left = insetExtent(thickenedContours(m, drawn, grow), inset);
+    expect(left).not.toBeNull();
+    const [width, height] = left ?? [0, 0];
     const xs = drawn.flat().map(([x]) => x);
     expect(width).toBeGreaterThan(0.7 * (Math.max(...xs) - Math.min(...xs)));
     expect(height).toBeGreaterThan(0.8 * cap);
@@ -89,7 +111,7 @@ describe("strokeGrowth", () => {
   it("leaves letters alone once they are big enough", () => {
     expect(strokeGrowth(font, 9 * MM)).toBe(0);
     const outlines = textContours(font, "T", 1);
-    expect(thickenedContours(m, outlines, 0)).toBe(outlines);
+    expect(thickenedContours(m, outlines, 0)).toEqual(outlines);
   });
 });
 
@@ -107,15 +129,30 @@ describe("layoutPrintableLine", () => {
     ...towns.map((town): [string, number] => [town.toUpperCase(), MIN_CAPITALS_CAP_IN]),
     ["Jay Peak Resort", MIN_TEXT_CAP_IN],
     ["Loon Mountain Resort", MIN_TEXT_CAP_IN],
+    ["L'Anse, MI", MIN_TEXT_CAP_IN],
+    ["L'ANSE-ST-JEAN, QC", MIN_CAPITALS_CAP_IN],
+    ["VAL-D'ISÈRE, FRANCE", MIN_CAPITALS_CAP_IN],
   ];
 
-  it.each(lines)("leaves plate between every pair of thickened letters in %s", (text, cap) => {
+  it.each(lines)("leaves plate between every two thickened letters in %s", (text, cap) => {
     const { glyphs, grow } = layoutPrintableLine(font, text, cap);
     expect(glyphs).toHaveLength(text.replace(/\s/g, "").length);
     const thick = glyphs.map((glyph) => thickenedContours(m, glyph.contours, grow));
-    for (let i = 0; i + 1 < thick.length; i++) {
-      expect(gapBetween(thick[i], thick[i + 1])).toBeGreaterThan(MIN_GAP_IN - 0.01 * MM);
+    for (let i = 0; i < thick.length; i++) {
+      for (let j = i + 1; j < thick.length; j++) {
+        expect(gapBetween(thick[i], thick[j]), `${i} to ${j}`).toBeGreaterThan(MIN_GAP_IN - 0.01 * MM);
+      }
     }
+  });
+
+  it("moves a letter clear of the one before a narrow mark, not just of the mark", () => {
+    // The apostrophe is too narrow to hold the A off the L's arm.
+    const cap = MIN_TEXT_CAP_IN;
+    const drawn = layoutGlyphs(font, "L'A", fontSizeForCapHeight(font, cap));
+    expect(gapBetween(drawn[0].contours, drawn[2].contours)).toBeLessThan(MIN_GAP_IN);
+    const { glyphs, grow } = layoutPrintableLine(font, "L'A", cap);
+    const [l, , a] = glyphs.map((glyph) => thickenedContours(m, glyph.contours, grow));
+    expect(gapBetween(l, a)).toBeGreaterThan(MIN_GAP_IN - 0.01 * MM);
   });
 
   it.each([
@@ -167,7 +204,7 @@ describe("layoutPrintableLine", () => {
     // Round capitals dip a hair under the line; only the thickening shows.
     expect(flat.depth).toBeLessThan(flat.grow + 0.1 * MM);
     expect(comma.depth).toBeGreaterThan(flat.depth + 0.3 * MM);
-    expect(tail.depth).toBeCloseTo(0.3 * MIN_TEXT_CAP_IN + tail.grow, 2);
+    expect(Math.abs(tail.depth - (0.3 * MIN_TEXT_CAP_IN + tail.grow))).toBeLessThan(0.02 * MM);
     expect(layoutPrintableLine(font, "", MIN_TEXT_CAP_IN).depth).toBe(0);
   });
 
@@ -181,41 +218,48 @@ describe("layoutPrintableLine", () => {
       const drawn = textContours(font, letter, size);
       const thick = thickenedContours(m, drawn, grow);
       // An opening narrower than the gap closes into a hole, or a hole fills in.
-      expect(holeCount(thick, MIN_GAP_IN / 2), letter).toBe(holeCount(drawn));
+      expect(ringCount(thick, MIN_GAP_IN / 2), letter).toBe(ringCount(drawn));
     }
   });
 
   it("is why lower case stops at a larger size than capitals", () => {
     const size = fontSizeForCapHeight(font, MIN_CAPITALS_CAP_IN);
     const grow = strokeGrowth(font, MIN_CAPITALS_CAP_IN);
-    const closes = [..."aegs"].filter((letter) => {
+    const closes = [..."aes"].filter((letter) => {
       const drawn = textContours(font, letter, size);
-      return holeCount(thickenedContours(m, drawn, grow), MIN_GAP_IN / 2) !== holeCount(drawn);
+      return ringCount(thickenedContours(m, drawn, grow), MIN_GAP_IN / 2) !== ringCount(drawn);
     });
-    expect(closes.length).toBeGreaterThan(0);
+    expect(closes).toEqual([..."aes"]);
   });
 });
 
 describe("two lines on the plate", () => {
+  const NAME = "gypsy";
+
   it("keeps a descender on the name clear of the capitals under it", () => {
     const layout = fitNameplate(font, {
       shape: "rectangle",
       widthInches: 6,
       heightInches: 6,
       rotation: 0,
-      label: "gypsy",
+      label: NAME,
       place: "OCQSJ",
       compass: true,
-    })!;
-    expect(layout.place).toBe("OCQSJ");
+    });
+    expect(layout?.text).toBe(NAME);
+    expect(layout?.place).toBe("OCQSJ");
+    if (!layout) return;
     const placed = plateGlyphs(font, layout).map((glyph) =>
       thickenedContours(m, glyph.contours, glyph.grow).map((ring) =>
         ring.map(([x, y]): [number, number] => [x + glyph.centerX, y]),
       ),
     );
-    const name = placed.slice(0, 5);
-    const place = placed.slice(5);
-    const gaps = name.flatMap((upper) => place.map((lower) => gapBetween(upper, lower)));
-    expect(Math.min(...gaps)).toBeGreaterThan(MIN_GAP_IN);
+    const name = placed.slice(0, NAME.length);
+    const place = placed.slice(NAME.length);
+    expect(place).toHaveLength(5);
+    const nearest = Math.min(...name.flatMap((upper) => place.map((lower) => gapBetween(upper, lower))));
+    expect(nearest).toBeGreaterThan(MIN_GAP_IN);
+    // The lines are set close: tails do come within a millimeter of the capitals.
+    expect(nearest).toBeLessThan(1 * MM);
   });
 });

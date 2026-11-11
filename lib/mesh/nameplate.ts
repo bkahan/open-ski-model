@@ -53,7 +53,6 @@ const MM_PER_INCH = 25.4;
 
 /** Cap height as a fraction of the chamfer slope length. */
 const CAP_FRACTION = 0.38;
-const MIN_CAP_IN = MIN_TEXT_CAP_IN;
 const MAX_CAP_IN = 9 / MM_PER_INCH;
 /** With two lines the name gives up height to the one under it. */
 const TWO_LINE_CAP_FRACTION = 0.35;
@@ -280,7 +279,7 @@ function fitTwoLines(
   const roseShares = compass && content.roseShares;
   const roseRoom = roseShares ? roseDiameter : 0;
   const chromeCaps = (roseShares ? ROSE_GAP_CAPS : 0) + 2 * END_MARGIN_CAPS;
-  const largestCap = Math.min(MAX_CAP_IN, Math.max(MIN_CAP_IN, TWO_LINE_CAP_FRACTION * slope));
+  const largestCap = Math.min(MAX_CAP_IN, Math.max(MIN_TEXT_CAP_IN, TWO_LINE_CAP_FRACTION * slope));
 
   for (const form of forms) {
     const fits = (capInches: number) => {
@@ -294,7 +293,7 @@ function fitTwoLines(
       const textRoom = usable - roseRoom - chromeCaps * capInches;
       return placeLine.width <= textRoom && lineWidth(font, form, capInches) <= textRoom;
     };
-    const capInches = largestCapThatFits(fits, MIN_CAP_IN, largestCap);
+    const capInches = largestCapThatFits(fits, MIN_TEXT_CAP_IN, largestCap);
     if (capInches === null) continue;
     return { capInches, text: form, place, placeCapInches: secondLineCap(capInches), compass };
   }
@@ -320,14 +319,14 @@ export function fitPlateContent(
     if (twoLines) return twoLines;
   }
 
-  const largestCap = Math.min(MAX_CAP_IN, Math.max(MIN_CAP_IN, CAP_FRACTION * slope));
+  const largestCap = Math.min(MAX_CAP_IN, Math.max(MIN_TEXT_CAP_IN, CAP_FRACTION * slope));
   const fitsAt = (text: string, capInches: number) => {
     const chromeCaps = (text && roseShares ? ROSE_GAP_CAPS : 0) + 2 * END_MARGIN_CAPS;
     const room = usable - (roseShares ? roseDiameter : 0) - chromeCaps * capInches;
     return lineWidth(font, text, capInches) <= room;
   };
   const capFor = (text: string) =>
-    largestCapThatFits((capInches) => fitsAt(text, capInches), MIN_CAP_IN, largestCap);
+    largestCapThatFits((capInches) => fitsAt(text, capInches), MIN_TEXT_CAP_IN, largestCap);
   const oneLine = (capInches: number, text: string): NameplateLayout => ({
     capInches,
     text,
@@ -342,9 +341,9 @@ export function fitPlateContent(
   }
 
   let text = forms.at(-1) ?? "";
-  while (text && !fitsAt(text, MIN_CAP_IN)) text = shortenByOneLetter(text);
+  while (text && !fitsAt(text, MIN_TEXT_CAP_IN)) text = shortenByOneLetter(text);
   if (!text && !compass) return null;
-  return oneLine(text ? MIN_CAP_IN : largestCap, text);
+  return oneLine(text ? MIN_TEXT_CAP_IN : largestCap, text);
 }
 
 /** Width of the text block: the wider of its lines. */

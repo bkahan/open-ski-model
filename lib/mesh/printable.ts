@@ -3,7 +3,8 @@
 // some pairs of letters sit closer than the nozzle can lay plate between.
 // So every line of plate text is laid out here: strokes are thickened to
 // two passes, the letters are spread by what the thickening took from the
-// spaces between them, and any pair still too close is moved apart.
+// spaces between them, and any letter still too close to one before it
+// is moved along.
 //
 // Thickening also narrows the openings inside letters, and that sets how
 // small text may go. Lower case has the tight ones (the mouths of a, e, g
@@ -92,7 +93,11 @@ function pointsToOutlines(points: Contour[], outlines: Contour[]): number {
   return nearest;
 }
 
-/** Least distance between two sets of outlines that don't cross. */
+/**
+ * Least distance between two sets of outlines that don't cross. Outlines
+ * that do cross, or sit one inside the other, are not detected: glyphs of
+ * one line never do. Infinity when either set is empty.
+ */
 export function gapBetween(a: Contour[], b: Contour[]): number {
   return Math.min(pointsToOutlines(a, b), pointsToOutlines(b, a));
 }
@@ -116,10 +121,37 @@ export interface PrintableLine {
   depth: number;
 }
 
+interface SetGlyph {
+  contours: Contour[];
+  right: number;
+}
+
+/**
+ * How much farther along the line `contours` must sit to leave `leastGap`
+ * to everything already set. Usually only the letter before matters, but
+ * a narrow mark can leave its neighbors facing each other, as in L'A.
+ */
+function spreadToClear(contours: Contour[], set: SetGlyph[], spread: number, leastGap: number): number {
+  let needed = spread;
+  for (let pass = 0; pass < MAX_SPREAD_PASSES; pass++) {
+    const moved = shifted(contours, needed);
+    const left = extentX(moved)[0];
+    let short = 0;
+    for (const earlier of set) {
+      // Clear along the line is clear in every direction: skip the exact measure.
+      if (left - earlier.right >= leastGap) continue;
+      short = Math.max(short, leastGap - gapBetween(earlier.contours, moved));
+    }
+    if (short <= SPREAD_TOLERANCE_IN) break;
+    needed += short;
+  }
+  return needed;
+}
+
 /**
  * A line of text at a cap height, spaced for printing: once thickened by
- * `grow`, every pair of neighbors has the gap the font gave it, and never
- * less than MIN_GAP_IN.
+ * `grow`, neighbors have the gap the font gave them, and no two letters
+ * are closer than MIN_GAP_IN.
  */
 export function layoutPrintableLine(font: opentype.Font, text: string, capHeight: number): PrintableLine {
   const size = fontSizeForCapHeight(font, capHeight);
@@ -128,26 +160,16 @@ export function layoutPrintableLine(font: opentype.Font, text: string, capHeight
   const leastGap = MIN_GAP_IN + 2 * grow;
 
   const glyphs: PlacedGlyph[] = [];
+  const set: SetGlyph[] = [];
   let spread = 0;
-  let previous: Contour[] | null = null;
+  let lowest = 0;
   for (const glyph of layoutGlyphs(font, text, size)) {
-    if (previous) {
-      spread += 2 * grow;
-      const previousRight = extentX(previous)[1];
-      for (let pass = 0; pass < MAX_SPREAD_PASSES; pass++) {
-        const moved = shifted(glyph.contours, spread);
-        // Clear along the line is clear in every direction: skip the exact measure.
-        if (extentX(moved)[0] - previousRight >= leastGap) break;
-        const short = leastGap - gapBetween(previous, moved);
-        if (short <= SPREAD_TOLERANCE_IN) break;
-        spread += short;
-      }
-    }
+    if (set.length > 0) spread = spreadToClear(glyph.contours, set, spread + 2 * grow, leastGap);
     const contours = shifted(glyph.contours, spread);
     glyphs.push({ contours, centerX: glyph.centerX + spread, advance: glyph.advance });
-    previous = contours;
+    set.push({ contours, right: extentX(contours)[1] });
+    for (const ring of contours) for (const [, y] of ring) lowest = Math.min(lowest, y);
   }
-  const lowest = Math.min(0, ...glyphs.flatMap((glyph) => glyph.contours.flat().map(([, y]) => y)));
   return {
     glyphs,
     grow,
@@ -156,14 +178,17 @@ export function layoutPrintableLine(font: opentype.Font, text: string, capHeight
   };
 }
 
-/** Outlines moved outward by `grow` all round, corners rounded. */
+/**
+ * Outlines moved outward by `grow` all round, corners rounded. With
+ * nothing to add the outlines come back as they are, not copied.
+ */
 export function thickenedContours(m: ManifoldToplevel, outlines: Contour[], grow: number): Contour[] {
   if (grow <= 0 || outlines.length === 0) return outlines;
   const section = new m.CrossSection(outlines, "NonZero");
   try {
     const thickened = section.offset(grow, "Round", 2, THICKEN_ARC_SEGMENTS);
     try {
-      return thickened.toPolygons() as Contour[];
+      return thickened.toPolygons();
     } finally {
       thickened.delete();
     }

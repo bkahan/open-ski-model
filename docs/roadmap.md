@@ -69,8 +69,8 @@ no visible text. Replacing both:
     0.8 mm, two passes of the nozzle. Roboto Regular's bars are 0.108 of
     the cap height, so anything under 7.4 mm tall is thickened.
   - Letters are spread by what the thickening took from the gaps, and
-    pairs the font sets tight (tt, rt, VT) are moved apart until 0.5 mm
-    of plate is left between them.
+    letters the font sets tight (tt, rt, VT, the L and A of L'A) are
+    moved apart until 0.5 mm of plate is left between any two.
   - Thickening narrows the openings inside letters. Lower case keeps
     0.5 mm openings down to 6 mm caps; below that the mouths of a, e, g
     and s close and the dots of i and j touch their stems. Capitals keep

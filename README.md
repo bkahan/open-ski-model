@@ -48,7 +48,7 @@ box, get a watertight `.stl` you can hand to your slicer.
   from the chamfer slope and shrinks (then shortens with "…") to fit the
   face, never below 6 mm. Plate text is laid out for a 0.4 mm nozzle:
   strokes thickened to 0.8 mm, letters spaced so at least 0.5 mm of
-  plate is left between them. The pocket fill bodies are kept as
+  plate is left between any two of them. The pocket fill bodies are kept as
   separate inlays for multicolor printing.
 - **Optional plinth + engravings.**
   - *Label + compass:* a beveled plinth wraps the model and the place
