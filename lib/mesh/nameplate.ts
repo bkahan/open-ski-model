@@ -16,14 +16,16 @@
 //                   all with shapeOutline's sign convention
 //
 // Font size comes from the chamfer: cap height is a fraction of the
-// slope length, clamped to what a nozzle can resolve, then shrunk until
-// the name and rose fit the face. A name that still won't fit loses its
-// generic words before it loses letters.
+// slope length, then shrunk until the name and rose fit the face, but
+// never below what a nozzle prints legibly (printable.ts sets that size
+// and spaces the letters). A name that still won't fit loses its generic
+// words before it loses letters.
 //
-// A second line (the town and state) sits under the name in smaller
-// letters, both lines starting at the same left edge, with the rose
-// centered on the pair. It is the first thing to go when room runs out:
-// the name alone is then set exactly as it would be without one.
+// A second line (the town and state) sits under the name in small
+// capitals, which stay printable at a size lower case does not. Both
+// lines start at the same left edge, with the rose centered on the pair.
+// The second line is the first thing to go when room runs out: the name
+// alone is then set exactly as it would be without one.
 
 import type { Manifold, ManifoldToplevel } from "manifold-3d";
 import type * as opentype from "opentype.js";
@@ -40,23 +42,30 @@ import {
   RIM_IN,
 } from "./plinth";
 import {
-  fontSizeForCapHeight,
-  layoutGlyphs,
-  measureTextWidth,
-  type Contour,
-} from "./text";
+  layoutPrintableLine,
+  MIN_CAPITALS_CAP_IN,
+  MIN_TEXT_CAP_IN,
+  thickenedContours,
+} from "./printable";
+import type { Contour } from "./text";
 
 const MM_PER_INCH = 25.4;
 
 /** Cap height as a fraction of the chamfer slope length. */
 const CAP_FRACTION = 0.38;
-const MIN_CAP_IN = 3 / MM_PER_INCH;
+const MIN_CAP_IN = MIN_TEXT_CAP_IN;
 const MAX_CAP_IN = 9 / MM_PER_INCH;
 /** With two lines the name gives up height to the one under it. */
-const TWO_LINE_CAP_FRACTION = 0.3;
-/** Second line's cap height against the name's, and the space between them in name caps. */
-const SECOND_LINE_CAP_RATIO = 0.62;
-const LINE_GAP_CAPS = 0.55;
+const TWO_LINE_CAP_FRACTION = 0.35;
+/** Second line's cap height against the name's. It stops shrinking at the printable minimum. */
+const SECOND_LINE_CAP_RATIO = 0.7;
+/**
+ * Space between the lines in name caps: room for a descender on the name
+ * to hang over the capitals under it with plate left between them.
+ */
+const LINE_GAP_CAPS = 0.45;
+/** Halvings when a cap height is searched for: finer than a hundredth of a millimeter. */
+const CAP_SEARCH_STEPS = 10;
 /** Pocket depth and how far the cutter starts above the face. */
 export const POCKET_DEPTH_IN = 1 / MM_PER_INCH;
 export const OVERCUT_IN = 0.02;
@@ -94,7 +103,7 @@ export interface NameplateLayout {
   capInches: number;
   /** The text actually set (may be shortened to fit). */
   text: string;
-  /** The second line as set; empty when there is none or it had to go. */
+  /** The second line as set, in capitals; empty when there is none or it had to go. */
   place: string;
   placeCapInches: number;
   compass: boolean;
@@ -220,8 +229,39 @@ export interface PlateContent {
   roseShares: boolean;
 }
 
-function unitWidth(font: opentype.Font, text: string): number {
-  return text ? measureTextWidth(font, text, fontSizeForCapHeight(font, 1)) : 0;
+function lineWidth(font: opentype.Font, text: string, capInches: number): number {
+  return text ? layoutPrintableLine(font, text, capInches).width : 0;
+}
+
+/**
+ * The largest cap height from `smallest` to `largest` that `fits`, or null
+ * when even the smallest doesn't. Thickening and spacing don't scale with
+ * the letters, so the size is searched for instead of solved.
+ */
+function largestCapThatFits(
+  fits: (capInches: number) => boolean,
+  smallest: number,
+  largest: number,
+): number | null {
+  if (largest < smallest || !fits(smallest)) return null;
+  if (fits(largest)) return largest;
+  let fitting = smallest;
+  let tooBig = largest;
+  for (let step = 0; step < CAP_SEARCH_STEPS; step++) {
+    const middle = (fitting + tooBig) / 2;
+    if (fits(middle)) fitting = middle;
+    else tooBig = middle;
+  }
+  return fitting;
+}
+
+function secondLineCap(capInches: number): number {
+  return Math.max(MIN_CAPITALS_CAP_IN, SECOND_LINE_CAP_RATIO * capInches);
+}
+
+/** Cap top of the name to baseline of the line under it. */
+function blockHeight(capInches: number, placeCapInches: number): number {
+  return capInches * (1 + LINE_GAP_CAPS) + placeCapInches;
 }
 
 /**
@@ -241,20 +281,22 @@ function fitTwoLines(
   const roseRoom = roseShares ? roseDiameter : 0;
   const chromeCaps = (roseShares ? ROSE_GAP_CAPS : 0) + 2 * END_MARGIN_CAPS;
   const largestCap = Math.min(MAX_CAP_IN, Math.max(MIN_CAP_IN, TWO_LINE_CAP_FRACTION * slope));
-  const placeUnit = unitWidth(font, place);
 
   for (const form of forms) {
-    const widest = Math.max(unitWidth(font, form), SECOND_LINE_CAP_RATIO * placeUnit);
-    const capInches = Math.min(largestCap, (usable - roseRoom) / (widest + chromeCaps));
-    if (capInches < MIN_CAP_IN) continue;
-    // The second line stops shrinking at the printable minimum, so it can
-    // end up wider than the name it sits under.
-    const placeCapInches = Math.max(MIN_CAP_IN, SECOND_LINE_CAP_RATIO * capInches);
-    const textRoom = usable - roseRoom - chromeCaps * capInches;
-    if (placeUnit * placeCapInches > textRoom + 1e-9) continue;
-    // The rose's diameter is the height the face has to give.
-    if (capInches * (1 + LINE_GAP_CAPS) + placeCapInches > roseDiameter) continue;
-    return { capInches, text: form, place, placeCapInches, compass };
+    const fits = (capInches: number) => {
+      const placeCapInches = secondLineCap(capInches);
+      const placeLine = layoutPrintableLine(font, place, placeCapInches);
+      // The rose's diameter is the height the face has to give. The block
+      // is centered on the rose, and a comma may hang as far below it as
+      // the rose's own pocket is kept from the face's bottom edge.
+      const below = blockHeight(capInches, placeCapInches) / 2 + placeLine.depth;
+      if (below > roseDiameter / 2 + ROSE_BOTTOM_EXTRA_IN) return false;
+      const textRoom = usable - roseRoom - chromeCaps * capInches;
+      return placeLine.width <= textRoom && lineWidth(font, form, capInches) <= textRoom;
+    };
+    const capInches = largestCapThatFits(fits, MIN_CAP_IN, largestCap);
+    if (capInches === null) continue;
+    return { capInches, text: form, place, placeCapInches: secondLineCap(capInches), compass };
   }
   return null;
 }
@@ -267,7 +309,7 @@ export function fitPlateContent(
   const { usable, slope, roseDiameter } = content;
   // A place with no name over it is simply the name.
   const label = content.label || (content.place ?? "");
-  const place = content.label ? (content.place ?? "") : "";
+  const place = content.label ? (content.place ?? "").toUpperCase() : "";
   const compass = content.compass && roseDiameter <= usable;
   if (!label && !compass) return null;
   const roseShares = compass && content.roseShares;
@@ -279,14 +321,13 @@ export function fitPlateContent(
   }
 
   const largestCap = Math.min(MAX_CAP_IN, Math.max(MIN_CAP_IN, CAP_FRACTION * slope));
-  // Everything but the rose scales with the cap height, so the largest
-  // cap that fits is solved for directly. Comparing widths after scaling
-  // would let rounding error reject a name that fits exactly.
-  const capFor = (text: string) => {
-    const widthCaps =
-      unitWidth(font, text) + (text && roseShares ? ROSE_GAP_CAPS : 0) + 2 * END_MARGIN_CAPS;
-    return Math.min(largestCap, (usable - (roseShares ? roseDiameter : 0)) / widthCaps);
+  const fitsAt = (text: string, capInches: number) => {
+    const chromeCaps = (text && roseShares ? ROSE_GAP_CAPS : 0) + 2 * END_MARGIN_CAPS;
+    const room = usable - (roseShares ? roseDiameter : 0) - chromeCaps * capInches;
+    return lineWidth(font, text, capInches) <= room;
   };
+  const capFor = (text: string) =>
+    largestCapThatFits((capInches) => fitsAt(text, capInches), MIN_CAP_IN, largestCap);
   const oneLine = (capInches: number, text: string): NameplateLayout => ({
     capInches,
     text,
@@ -295,11 +336,13 @@ export function fitPlateContent(
     compass,
   });
 
-  const fitting = forms.find((form) => capFor(form) >= MIN_CAP_IN);
-  if (fitting) return oneLine(capFor(fitting), fitting);
+  for (const form of forms) {
+    const capInches = capFor(form);
+    if (capInches !== null) return oneLine(capInches, form);
+  }
 
   let text = forms.at(-1) ?? "";
-  while (text && capFor(text) < MIN_CAP_IN) text = shortenByOneLetter(text);
+  while (text && !fitsAt(text, MIN_CAP_IN)) text = shortenByOneLetter(text);
   if (!text && !compass) return null;
   return oneLine(text ? MIN_CAP_IN : largestCap, text);
 }
@@ -307,36 +350,42 @@ export function fitPlateContent(
 /** Width of the text block: the wider of its lines. */
 export function plateTextWidth(font: opentype.Font, layout: NameplateLayout): number {
   return Math.max(
-    unitWidth(font, layout.text) * layout.capInches,
-    unitWidth(font, layout.place) * layout.placeCapInches,
+    lineWidth(font, layout.text, layout.capInches),
+    lineWidth(font, layout.place, layout.placeCapInches),
   );
 }
 
 export interface PlateGlyph {
-  /** Outline around the glyph's own horizontal center, y measured from the middle of the text block. */
+  /**
+   * Outline as the font draws it, around the glyph's own horizontal
+   * center, y measured from the middle of the text block.
+   */
   contours: Contour[];
   /** Distance of that center from the block's left edge. */
   centerX: number;
+  /** What thickenedContours must add around the outline before it is cut. */
+  grow: number;
 }
 
 /** Every glyph of the plate's text, both lines starting at the left edge. */
 export function plateGlyphs(font: opentype.Font, layout: NameplateLayout): PlateGlyph[] {
   const cap = layout.capInches;
-  const block = layout.place ? cap * (1 + LINE_GAP_CAPS) + layout.placeCapInches : cap;
+  const block = layout.place ? blockHeight(cap, layout.placeCapInches) : cap;
   const lines = [
     { text: layout.text, cap, baseline: block / 2 - cap },
     { text: layout.place, cap: layout.placeCapInches, baseline: -block / 2 },
   ];
-  return lines.flatMap((line) =>
-    line.text
-      ? layoutGlyphs(font, line.text, fontSizeForCapHeight(font, line.cap)).map((g) => ({
-          contours: g.contours.map((c) =>
-            c.map(([x, y]): [number, number] => [x - g.centerX, y + line.baseline]),
-          ),
-          centerX: g.centerX,
-        }))
-      : [],
-  );
+  return lines.flatMap((line) => {
+    if (!line.text) return [];
+    const { glyphs, grow } = layoutPrintableLine(font, line.text, line.cap);
+    return glyphs.map((g) => ({
+      contours: g.contours.map((c) =>
+        c.map(([x, y]): [number, number] => [x - g.centerX, y + line.baseline]),
+      ),
+      centerX: g.centerX,
+      grow,
+    }));
+  });
 }
 
 /** Fit the name and rose to the plinth face they will sit on. */
@@ -395,7 +444,9 @@ export function buildNameplateSolids(
   const items: Array<{ contours: Contour[]; x: number; extraTurn: number }> = [];
   for (const glyph of plateGlyphs(font, layout)) {
     items.push({
-      contours: glyph.contours.map((c) => c.map(([x, y]) => [x, y + textLift])),
+      contours: thickenedContours(m, glyph.contours, glyph.grow).map((c) =>
+        c.map(([x, y]) => [x, y + textLift]),
+      ),
       x: startX + glyph.centerX,
       extraTurn: 0,
     });

@@ -143,7 +143,7 @@ describe("buildOutlinePlinth with a place line", () => {
     });
     withSolids([built.slab, ...built.solids], () => {
       expect(built.layout?.text).toBe("Sugarloaf");
-      expect(built.layout?.place).toBe("Carrabassett Valley, ME");
+      expect(built.layout?.place).toBe("CARRABASSETT VALLEY, ME");
       const letters = "Sugarloaf".length + "CarrabassettValley,ME".length;
       expect(built.solids).toHaveLength(letters + 1);
 

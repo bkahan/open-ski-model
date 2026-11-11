@@ -8,7 +8,7 @@ import { PLACE_MAX_CHARS } from "@/lib/resort/place";
 //     the rim facing the resort's base (the bottom of the frame when
 //     there is no resort). The rim is tilted 35° from horizontal so
 //     the engraving faces up when the model sits on a desk. A second
-//     line under the name takes the town and state.
+//     line under the name takes the town and state, in small capitals.
 //   - "Brand on bottom": engraves "craftedcarving.com" on the bottom
 //     face. Independent of the label toggle.
 
@@ -75,7 +75,7 @@ export default function EngravingControls({
             className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900/80 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
           />
           <span className="mt-1 block text-[10px] text-slate-500">
-            Town and state under the name. Filled in when you pick a resort; edit it or clear it for one line.
+            Town and state under the name, set in capitals. Filled in when you pick a resort; edit it or clear it for one line.
           </span>
         </label>
       )}

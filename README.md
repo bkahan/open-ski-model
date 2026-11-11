@@ -46,13 +46,15 @@ box, get a watertight `.stl` you can hand to your slicer.
   and lifts; the frame's bottom edge when there is no resort), so on a
   circular plinth they follow the cone. Cap height comes
   from the chamfer slope and shrinks (then shortens with "…") to fit the
-  face, never below 3 mm. The pocket fill bodies are kept as separate
-  inlays for multicolor printing.
+  face, never below 6 mm. Plate text is laid out for a 0.4 mm nozzle:
+  strokes thickened to 0.8 mm, letters spaced so at least 0.5 mm of
+  plate is left between them. The pocket fill bodies are kept as
+  separate inlays for multicolor printing.
 - **Optional plinth + engravings.**
   - *Label + compass:* a beveled plinth wraps the model and the place
     name + an N/E/S/W compass rose are inlaid into the rim on the base
     side, tilted 35° so they face up on a desk. A second, smaller line
-    under the name takes the town and state ("Jay, VT"), with the rose
+    under the name takes the town and state in capitals ("JAY, VT"), with the rose
     beside the pair. Picking a resort fills it in: from the ski-area index
     at once, then from an OpenStreetMap (Nominatim) lookup at the resort's
     base area. Edit it, or clear it for one line.
@@ -271,6 +273,7 @@ lib/mesh/
     engrave.ts             Plinth + name plate + brand + export union
     plinth.ts              Chamfered plinth solid (hull of offset outlines)
     nameplate.ts           Glyph placement on the chamfer, font fitting
+    printable.ts           Stroke thickening and letter spacing for a 0.4 mm nozzle
     compass.ts             Compass rose outlines
     silhouette.ts          Resort outline, slab and name tab
     inlays.ts              Runs + lifts as flush color bodies, one per filament

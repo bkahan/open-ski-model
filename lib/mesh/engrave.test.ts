@@ -22,6 +22,7 @@ import {
   roseDiameterInches,
 } from "./nameplate";
 import { buildPlinthSolid, plinthHeightInches, RIM_IN } from "./plinth";
+import { MIN_CAPITALS_CAP_IN, MIN_TEXT_CAP_IN } from "./printable";
 import { buildShapedWatertight, buildWatertight } from "./watertight";
 
 type Toplevel = Awaited<ReturnType<typeof Module>>;
@@ -79,7 +80,7 @@ describe("buildPlinthSolid", () => {
 describe("fitNameplate", () => {
   it("sizes caps from the chamfer and keeps a short name at full size", () => {
     const layout = fitNameplate(font, { shape: "rectangle", ...base, label: "Jay Peak", compass: true })!;
-    expect(layout.capInches).toBeGreaterThan(3 / 25.4);
+    expect(layout.capInches).toBeGreaterThan(MIN_TEXT_CAP_IN);
     expect(layout.capInches).toBeLessThanOrEqual(9 / 25.4);
     expect(layout.text).toBe("Jay Peak");
   });
@@ -87,7 +88,8 @@ describe("fitNameplate", () => {
   it("shrinks, then shortens, a long name on a small face", () => {
     const small = { shape: "hexagon" as Shape, widthInches: 3, heightInches: 2.6, rotation: 0 };
     const layout = fitNameplate(font, { ...small, label: "Dolomiti Superski Alta Badia", compass: true })!;
-    expect(layout.capInches).toBeCloseTo(3 / 25.4, 5);
+    // Letters stop shrinking at the size a nozzle still prints legibly.
+    expect(layout.capInches).toBeCloseTo(MIN_TEXT_CAP_IN, 9);
     expect(layout.text.endsWith("…")).toBe(true);
     expect(layout.text.length).toBeLessThan("Dolomiti Superski Alta Badia".length);
   });
@@ -95,7 +97,7 @@ describe("fitNameplate", () => {
   it("never cuts off a name that fits, whatever the model size", () => {
     // Regression: rounding after the shrink rejected exact fits, turning
     // "Resort" into "Reso…" on about a quarter of sizes.
-    for (let w = 3; w < 4.5; w += 0.00137) {
+    for (let w = 4.3; w < 5.8; w += 0.0137) {
       const layout = fitNameplate(font, {
         shape: "circle",
         widthInches: w,
@@ -109,16 +111,16 @@ describe("fitNameplate", () => {
   });
 
   it("drops generic words before cutting letters", () => {
-    const tiny = { shape: "circle" as Shape, widthInches: 2, heightInches: 2, rotation: 0, compass: true };
-    expect(fitNameplate(font, { ...tiny, label: "Loon Mountain Resort" })!.text).toBe("Loon Mountain");
-    expect(fitNameplate(font, { ...tiny, label: "Bretton Woods Ski Area" })!.text).toBe("Bretton Woods");
+    const small = { shape: "circle" as Shape, widthInches: 3, heightInches: 3, rotation: 0, compass: true };
+    expect(fitNameplate(font, { ...small, label: "Loon Mountain Resort" })!.text).toBe("Loon Mountain");
+    expect(fitNameplate(font, { ...small, label: "Bretton Woods Ski Area" })!.text).toBe("Bretton Woods");
   });
 
   it("uses the part before a comma when the whole name won't fit", () => {
     const layout = fitNameplate(font, {
       shape: "circle",
-      widthInches: 3,
-      heightInches: 3,
+      widthInches: 5,
+      heightInches: 5,
       rotation: 0,
       label: "Mont Tremblant Resort, Station Mont Tremblant",
       compass: true,
@@ -138,16 +140,17 @@ describe("fitNameplate", () => {
     expect(layout).toBeNull();
   });
 
-  it("sets the place under the name in smaller letters", () => {
+  it("sets the place under the name in smaller capitals", () => {
     const plate = { shape: "rectangle" as Shape, ...base, label: "Jay Peak Resort", compass: true };
     const alone = fitNameplate(font, plate)!;
     const layout = fitNameplate(font, { ...plate, place: "Jay, VT" })!;
     expect(layout.text).toBe("Jay Peak Resort");
-    expect(layout.place).toBe("Jay, VT");
-    // The name gives up height to make room, and neither line drops below 3 mm.
+    expect(layout.place).toBe("JAY, VT");
+    // The name gives up height to make room, and neither line drops below what prints.
+    expect(layout.capInches).toBeGreaterThanOrEqual(MIN_TEXT_CAP_IN);
     expect(layout.capInches).toBeLessThan(alone.capInches);
     expect(layout.placeCapInches).toBeLessThan(layout.capInches);
-    expect(layout.placeCapInches).toBeGreaterThanOrEqual(3 / 25.4 - 1e-9);
+    expect(layout.placeCapInches).toBeGreaterThanOrEqual(MIN_CAPITALS_CAP_IN - 1e-9);
   });
 
   it("drops the place, not the name, when the two won't fit", () => {
@@ -161,7 +164,7 @@ describe("fitNameplate", () => {
   it("gives up a generic word in the name before it gives up the place", () => {
     // Shrinking the plinth squeezes the plate through its stages in order.
     const stages: string[] = [];
-    for (let w = 4; w >= 2; w -= 0.02) {
+    for (let w = 5; w >= 2; w -= 0.02) {
       const layout = fitNameplate(font, {
         shape: "circle",
         widthInches: w,
@@ -175,8 +178,8 @@ describe("fitNameplate", () => {
       if (stages.at(-1) !== stage) stages.push(stage);
     }
     expect(stages.slice(0, 2)).toEqual([
-      "Loon Mountain Resort | Lincoln, NH",
-      "Loon Mountain | Lincoln, NH",
+      "Loon Mountain Resort | LINCOLN, NH",
+      "Loon Mountain | LINCOLN, NH",
     ]);
   });
 
@@ -384,7 +387,7 @@ describe("buildNameplateSolids", () => {
   });
 
   it("gives a hexagon's rose the next face and the name its own", () => {
-    const hex = { shape: "hexagon" as Shape, widthInches: 3, heightInches: 3 * 0.866, rotation: 0, compass: true };
+    const hex = { shape: "hexagon" as Shape, widthInches: 6, heightInches: 6 * 0.866, rotation: 0, compass: true };
     const label = "Stowe Mountain";
     expect(fitNameplate(font, { ...hex, label })!.text).toBe(label);
     const { solids } = buildNameplateSolids(m, font, { ...hex, label });
@@ -393,7 +396,7 @@ describe("buildNameplateSolids", () => {
       const bearing = (Math.atan2(box.min[0] + box.max[0], box.min[2] + box.max[2]) * 180) / Math.PI;
       expect(bearing).toBeCloseTo(120, -1);
       const nameBox = solids[0].boundingBox();
-      expect(nameBox.min[2]).toBeLessThan(-(1.5 * 0.866));
+      expect(nameBox.min[2]).toBeLessThan(-(3 * 0.866));
     });
   });
 

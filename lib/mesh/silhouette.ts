@@ -23,6 +23,7 @@ import {
   ROSE_GAP_CAPS,
   type NameplateLayout,
 } from "./nameplate";
+import { thickenedContours } from "./printable";
 import type { Contour } from "./text";
 
 const MM_PER_INCH = 25.4;
@@ -391,7 +392,8 @@ export function buildOutlinePlinth(
       let textEnd = startX;
       if (layout.text) {
         for (const glyph of plateGlyphs(font, layout)) {
-          solids.push(flatPocket(m, glyph.contours, startX + glyph.centerX, tabZ, spin));
+          const outline = thickenedContours(m, glyph.contours, glyph.grow);
+          solids.push(flatPocket(m, outline, startX + glyph.centerX, tabZ, spin));
         }
         textEnd = startX + plateTextWidth(font, layout) + ROSE_GAP_CAPS * layout.capInches;
       }
