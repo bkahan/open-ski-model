@@ -19,6 +19,7 @@ const base: UrlState = {
   engraveBrand: true,
   showRuns: true,
   showLifts: true,
+  followConnected: false,
   minRunWidthMm: 1.2,
   colorScheme: "auto",
   label: "Jay Peak",
@@ -80,19 +81,28 @@ describe("resort url state", () => {
       ...base,
       showRuns: false,
       showLifts: false,
+      followConnected: true,
       minRunWidthMm: 1.6,
       colorScheme: "eu",
     });
     expect(params.get("runs")).toBe("0");
     expect(params.get("lf")).toBe("0");
+    expect(params.get("fc")).toBe("1");
     expect(params.get("mw")).toBe("1.6");
     expect(params.get("cs")).toBe("eu");
 
     const decoded = decodeUrlState(params);
     expect(decoded.showRuns).toBe(false);
     expect(decoded.showLifts).toBe(false);
+    expect(decoded.followConnected).toBe(true);
     expect(decoded.minRunWidthMm).toBe(1.6);
     expect(decoded.colorScheme).toBe("eu");
+  });
+
+  it("leaves following connected runs off unless the link says 1", () => {
+    expect(decodeUrlState(new URLSearchParams("")).followConnected).toBeUndefined();
+    expect(decodeUrlState(new URLSearchParams("fc=0")).followConnected).toBeUndefined();
+    expect(decodeUrlState(new URLSearchParams("fc=yes")).followConnected).toBeUndefined();
   });
 
   it("ignores junk values", () => {

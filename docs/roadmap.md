@@ -137,8 +137,15 @@ no visible text. Replacing both:
   frame at a fixed center that cut Jay's west edge off.
 - Rectangle, Circle and Hex are plain shapes: a frame to drag, never cut
   to a resort.
-- Open: untagged runs that start outside the resort (Sugarloaf's far
-  east glades) are left out of the outline.
+- Untagged runs that start outside that reach are left out unless
+  "Follow connected runs" is on (Ski runs panel, off by default, `fc=1`
+  in a link). It adds the untagged lines that cross or come within 30 m
+  of the resort's lines, and the ones that join those, outward. The frame and
+  outline are refitted. On Sugarloaf that is the four Burnt Mountain
+  runs (frame 4.59 to 4.70 km). The data has no flag for "the resort
+  lists this run", only whether lines meet, so the same rule takes the
+  Teardrop backcountry trail at Stowe (frame 6.05 to 7.17 km). That is
+  why it is a toggle.
 - With the name on, a 4 mm slab follows the outline with a flat tab on
   the base side carrying the name and rose; the brand goes under the tab.
 

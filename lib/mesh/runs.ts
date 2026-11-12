@@ -142,11 +142,11 @@ export function resortInlayGroups(
  * model with nothing on it.
  */
 export function resortLinesOnPlane(
-  spec: FrameSpec & { resort: ResortData; areaId?: string | null },
+  spec: FrameSpec & { resort: ResortData; areaId?: string | null; followConnected: boolean },
 ): Array<Array<[number, number]>> {
   const { geoToLocal } = modelPlane(spec);
   const lines = spec.areaId
-    ? resortLines(spec.resort, spec.areaId)
+    ? resortLines(spec.resort, spec.areaId, { followConnected: spec.followConnected })
     : [...spec.resort.runs.filter((r) => !r.isArea), ...spec.resort.lifts];
   return lines.map((line) => line.coords.map(geoToLocal));
 }
