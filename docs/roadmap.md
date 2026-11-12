@@ -87,18 +87,65 @@ no visible text. Replacing both:
   keeps the ground.
 - Model height is set in inches (0.75" default, scaling with the print).
   Exaggeration follows from each resort's relief, 0.5–8×.
+- Two ways to size (`lib/print-fit.ts`, `printFrame`):
+  - Set size: as above. For the Resort shape the size is the mountain's
+    longest side, measured square to its frame, and the hidden frame is
+    built that much bigger (the outline is about 95% of its frame). The
+    name tab is extra.
+  - Set scale: 1 : N is typed or picked (10k to 50k presets, 1,000 to
+    500,000 allowed) and the print comes out however big the covered
+    ground is at it. The panel reads the size back in inches and mm, and
+    says when it is past a 256 mm bed. Nothing over 100 in is built.
+    Changing N keeps the vertical exaggeration by scaling the model
+    height with it. The field takes "25,000", "1:25000" and "25k".
+- The panel's size and the frame on the map stay a "layout" that every
+  frame edit works on; only what is generated and read out goes through
+  `printFrame`. Switching between the two ways keeps the print as it is
+  (to the nearest whole N), unless the size's scale is outside 1,000 to
+  500,000, in which case it moves to the nearest end.
+- The map's outline is traced at one nominal size. On the ground it is
+  the same ring at any print size (its share of the frame varied 0.950
+  to 0.952 from 3 to 40 in on Jay Peak), so a size or scale change does
+  not retrace it.
+- Generate waits for the outline's trace whenever the frame it is
+  traced in has changed, since the frame to build is sized off it.
+- Open: prints bigger than the bed have no tiling yet, and there is no
+  printer profile (bed, nozzle) to check against. The model height
+  slider still stops at 4 in, which a print past about 30 in outgrows
+  (the height is kept, but the slider can't show or set it).
 
 ### Resort silhouette (done)
 
-- "Resort" footprint, the default after picking a resort: the frame stays
-  a rectangle on the map and the model is cut to an outline around its
-  runs and lifts (buffered 3% of the print, bays closed at 7%, detached
-  clusters and holes dropped). Polygon runs don't count: they aren't drawn,
-  and OSM can map a whole backcountry zone as one. Lines tagged only to
-  another ski area don't count either. Manifold intersects it, so edges
-  are clean.
-- Picking a resort frames it from the runs and lifts tagged to it. The
-  index viewport is used only until those load.
+- "Resort" footprint, the default after picking a resort: the model is
+  cut to an outline around its runs and lifts (buffered 3% of the print,
+  bays closed at 7%, detached clusters and holes dropped). Polygon runs
+  don't count: they aren't drawn, and OSM can map a whole backcountry
+  zone as one. Lines tagged only to another ski area don't count either.
+  Manifold intersects it, so edges are clean.
+- The map shows that outline, not a frame. It is traced by the same code
+  the model is cut with (`lib/mesh/resort-outline.ts`). The frame behind
+  it, a square turned to the resort's bearing, is fitted to the resort's
+  lines and is not the user's to drag, size or turn. Until the lines have
+  loaded there is nothing to generate.
+- One rule says which lines are a ski area's (`resortLines`): those
+  tagged to it, and untagged ones with a point within 5% of the tagged
+  lines' bounds. The frame and the outline both use it. They used to
+  differ, and a chain of untagged runs leading away from the resort ran
+  the outline into the frame's edge, where it was cut off flat.
+- Resort is on offer once a ski area has been picked in search. A first
+  visit opens on Jay Peak picked that way; it used to open on a plain
+  frame at a fixed center that cut Jay's west edge off.
+- Rectangle, Circle and Hex are plain shapes: a frame to drag, never cut
+  to a resort.
+- Untagged runs that start outside that reach are left out unless
+  "Follow connected runs" is on (Ski runs panel, off by default, `fc=1`
+  in a link). It adds the untagged lines that cross or come within 30 m
+  of the resort's lines, and the ones that join those, outward. The frame and
+  outline are refitted. On Sugarloaf that is the four Burnt Mountain
+  runs (frame 4.59 to 4.70 km). The data has no flag for "the resort
+  lists this run", only whether lines meet, so the same rule takes the
+  Teardrop backcountry trail at Stowe (frame 6.05 to 7.17 km). That is
+  why it is a toggle.
 - With the name on, a 4 mm slab follows the outline with a flat tab on
   the base side carrying the name and rose; the brand goes under the tab.
 

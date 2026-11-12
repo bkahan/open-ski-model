@@ -123,8 +123,8 @@ async function searchResorts(query: string, signal: AbortSignal): Promise<Search
   return results.map(resortToResult);
 }
 
-/** Axis-aligned bounds of the resort's rotated natural viewport. */
-function resortToResult(hit: SkiAreaHit): SearchResult {
+/** A ski area from the index as a search result, its bbox the bounds of its rotated natural viewport. */
+export function resortToResult(hit: SkiAreaHit): SearchResult {
   const theta = (hit.bearing * Math.PI) / 180;
   const halfW = (hit.widthMeters * Math.abs(Math.cos(theta)) + hit.heightMeters * Math.abs(Math.sin(theta))) / 2;
   const halfH = (hit.widthMeters * Math.abs(Math.sin(theta)) + hit.heightMeters * Math.abs(Math.cos(theta))) / 2;

@@ -40,14 +40,11 @@ import { loadManifold, vertexDataFromManifold, type ColorAt, type TriMesh } from
 import { buildColorBodies, treelineFor } from "@/lib/mesh/multicolor";
 import { buildThreeMf } from "@/lib/mesh/three-mf";
 import { plateFacingDeg } from "@/lib/mesh/nameplate";
-import {
-  buildResortOutline,
-  OUTLINE_PLINTH_HEIGHT_IN,
-  outlineMask,
-} from "@/lib/mesh/silhouette";
+import { traceResortOutline } from "@/lib/mesh/resort-outline";
+import { OUTLINE_PLINTH_HEIGHT_IN, outlineMask } from "@/lib/mesh/silhouette";
 import type { Contour } from "@/lib/mesh/text";
 import { plinthHeightInches } from "@/lib/mesh/plinth";
-import { resortFrontBearing, resortInlayGroups, resortLinesOnPlane } from "@/lib/mesh/runs";
+import { resortFrontBearing, resortInlayGroups } from "@/lib/mesh/runs";
 import { exportToStep } from "@/lib/mesh/step-export";
 import { loadFont } from "@/lib/mesh/text";
 import type { ElevationResponse } from "@/lib/elevation/types";
@@ -83,6 +80,8 @@ interface Props {
   silhouette: boolean;
   /** The ski area picked from search; its neighbors stay out of the outline. */
   areaId: string | null;
+  /** The outline also takes untagged runs that join the ski area's further out. */
+  followConnected: boolean;
   /** Set the runs (and, with showLifts, the lifts) into the terrain as color bodies. */
   showRuns: boolean;
   colorScheme: ColorScheme;
@@ -176,6 +175,7 @@ export default function ModelViewer({
   resort,
   silhouette,
   areaId,
+  followConnected,
   showRuns,
   colorScheme,
   showLifts,
@@ -206,9 +206,9 @@ export default function ModelViewer({
   const outlineInputs = useMemo(
     () =>
       silhouette && resort && shape === "rectangle"
-        ? { bbox, data, shape, widthInches, heightInches, rotation, resort, areaId }
+        ? { bbox, data, shape, widthInches, heightInches, rotation, resort, areaId, followConnected }
         : null,
-    [silhouette, resort, areaId, bbox, data, shape, widthInches, heightInches, rotation],
+    [silhouette, resort, areaId, followConnected, bbox, data, shape, widthInches, heightInches, rotation],
   );
   const [traced, setTraced] = useState<{
     inputs: NonNullable<typeof outlineInputs>;
@@ -222,24 +222,7 @@ export default function ModelViewer({
     loadManifold()
       .then((m) => {
         if (cancelled) return;
-        const [halfW] = shapeAABBHalf(
-          outlineInputs.shape,
-          outlineInputs.widthInches,
-          outlineInputs.heightInches,
-          outlineInputs.rotation,
-        );
-        const cell = (halfW * 2) / (outlineInputs.data.width - 1);
-        const ring = buildResortOutline(
-          m,
-          resortLinesOnPlane(outlineInputs),
-          shapeOutline(
-            outlineInputs.shape,
-            outlineInputs.widthInches - 2 * cell,
-            outlineInputs.heightInches - 2 * cell,
-            outlineInputs.rotation,
-          ),
-          Math.max(outlineInputs.widthInches, outlineInputs.heightInches),
-        );
+        const ring = traceResortOutline(m, { ...outlineInputs, gridColumns: outlineInputs.data.width });
         setTraced({ inputs: outlineInputs, ring });
       })
       .catch((err: unknown) => {

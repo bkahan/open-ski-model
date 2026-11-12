@@ -205,17 +205,19 @@ are fused in by position dedup so the export stays a single solid.
 | `b`     | bbox: `west,south,east,north`                          |
 | `sh`    | `rectangle` \| `circle` \| `hexagon`                   |
 | `r`     | rotation in degrees (omitted when 0)                   |
-| `s`     | print canvas size: `WxH` in inches                     |
+| `s`     | print size: `WxH` in inches (the mountain's longest side for the Resort shape) |
 | `lk`    | `1` if aspect is locked (omitted otherwise)            |
+| `sc`    | set scale: the N of 1 : N. The print size then follows from the ground covered, and `s` only keeps its proportions |
 | `g`     | grid size (omitted at the default 256)                 |
 | `el`    | `1` to engrave the plinth label + compass              |
 | `eb`    | `0` to disable the bottom brand engraving (on by default) |
 | `t`     | base thickness, inches                                 |
 | `rh`    | model height, base to peak, in inches                  |
-| `ol`    | `1` to cut the model to the resort's outline           |
+| `ol`    | `1` for the Resort shape: the outline of ski area `ra`. Ignored without `ra` |
 | `ra`    | ski area id, keeps neighbors out of the outline        |
 | `runs`  | `0` to hide ski runs (on by default)                   |
 | `lf`    | `0` to hide lifts (on by default)                      |
+| `fc`    | `1` for the Resort shape to follow untagged runs that join the ski area's (off by default) |
 | `mw`    | minimum run width in mm (omitted at the default 1.2)   |
 | `cs`    | trail color scheme `na` \| `eu` (omitted when auto)    |
 | `label` | display name (URL-encoded)                             |
@@ -276,6 +278,7 @@ lib/mesh/
     printable.ts           Stroke thickening and letter spacing for a 0.4 mm nozzle
     compass.ts             Compass rose outlines
     silhouette.ts          Resort outline, slab and name tab
+    resort-outline.ts      Traces the outline for both the map and the model
     inlays.ts              Runs + lifts as flush color bodies, one per filament
     text.ts                Font loading, glyph outlines, text solids
     watertight.ts          Build closed VertexData from height grid

@@ -13,11 +13,13 @@ const base: UrlState = {
   baseThicknessInches: 0.25,
   reliefInches: 1.25,
   aspectLocked: true,
+  scaleDenominator: null,
   gridSize: 256,
   engraveLabel: false,
   engraveBrand: true,
   showRuns: true,
   showLifts: true,
+  followConnected: false,
   minRunWidthMm: 1.2,
   colorScheme: "auto",
   label: "Jay Peak",
@@ -79,24 +81,52 @@ describe("resort url state", () => {
       ...base,
       showRuns: false,
       showLifts: false,
+      followConnected: true,
       minRunWidthMm: 1.6,
       colorScheme: "eu",
     });
     expect(params.get("runs")).toBe("0");
     expect(params.get("lf")).toBe("0");
+    expect(params.get("fc")).toBe("1");
     expect(params.get("mw")).toBe("1.6");
     expect(params.get("cs")).toBe("eu");
 
     const decoded = decodeUrlState(params);
     expect(decoded.showRuns).toBe(false);
     expect(decoded.showLifts).toBe(false);
+    expect(decoded.followConnected).toBe(true);
     expect(decoded.minRunWidthMm).toBe(1.6);
     expect(decoded.colorScheme).toBe("eu");
+  });
+
+  it("leaves following connected runs off unless the link says 1", () => {
+    expect(decodeUrlState(new URLSearchParams("")).followConnected).toBeUndefined();
+    expect(decodeUrlState(new URLSearchParams("fc=0")).followConnected).toBeUndefined();
+    expect(decodeUrlState(new URLSearchParams("fc=yes")).followConnected).toBeUndefined();
   });
 
   it("ignores junk values", () => {
     const decoded = decodeUrlState(new URLSearchParams("mw=abc&cs=mars&mw=-1"));
     expect(decoded.minRunWidthMm).toBeUndefined();
     expect(decoded.colorScheme).toBeUndefined();
+  });
+});
+
+describe("sizing url state", () => {
+  it("leaves the scale out when the size is set", () => {
+    expect(encodeUrlState(base).has("sc")).toBe(false);
+    expect(decodeUrlState(encodeUrlState(base)).scaleDenominator).toBeUndefined();
+  });
+
+  it("round-trips a set scale", () => {
+    const params = encodeUrlState({ ...base, scaleDenominator: 25_000 });
+    expect(params.get("sc")).toBe("25000");
+    expect(decodeUrlState(params).scaleDenominator).toBe(25_000);
+  });
+
+  it("holds a scale from a link within range and ignores one that isn't a number", () => {
+    expect(decodeUrlState(new URLSearchParams("sc=3")).scaleDenominator).toBe(1_000);
+    expect(decodeUrlState(new URLSearchParams("sc=abc")).scaleDenominator).toBeUndefined();
+    expect(decodeUrlState(new URLSearchParams("sc=-5")).scaleDenominator).toBeUndefined();
   });
 });

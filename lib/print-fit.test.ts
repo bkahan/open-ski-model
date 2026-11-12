@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  clampScaleDenominator,
+  denominatorForMetersPerInch,
   exaggerationForRelief,
   fitDragToPrint,
+  MAX_SCALE_DENOMINATOR,
+  MIN_SCALE_DENOMINATOR,
+  parseScaleDenominator,
+  printFrame,
+  reliefForRescaledPrint,
   reliefForResizedPrint,
   scaleForResizedPrint,
+  tooLargeToBuild,
 } from "./print-fit";
 
 const six = { widthInches: 6, heightInches: 6 };
@@ -65,5 +73,110 @@ describe("exaggerationForRelief", () => {
 
   it("falls back to true scale with no relief", () => {
     expect(exaggerationForRelief(1.25, 0, 6 / 5_000)).toBe(1);
+  });
+});
+
+describe("printFrame", () => {
+  // Six inches square over 3,048 m of ground: 508 m to the inch, 1 : 20,000.
+  const layout = { size: six, metersPerInch: 508, outlineShare: null };
+
+  it("is the layout itself when the size is set", () => {
+    const frame = printFrame({ ...layout, sizing: { mode: "size" } });
+    expect(frame.widthInches).toBe(6);
+    expect(frame.heightInches).toBe(6);
+    expect(frame.metersPerInch).toBe(508);
+    expect(frame.stated).toEqual(six);
+    expect(denominatorForMetersPerInch(frame.metersPerInch)).toBeCloseTo(20_000, 6);
+  });
+
+  it("covers the same ground at a set scale, however big that makes the print", () => {
+    const frame = printFrame({ ...layout, sizing: { mode: "scale", denominator: 10_000 } });
+    expect(frame.widthInches).toBeCloseTo(12, 9);
+    expect(frame.heightInches).toBeCloseTo(12, 9);
+    expect(denominatorForMetersPerInch(frame.metersPerInch)).toBeCloseTo(10_000, 6);
+    expect(frame.widthInches * frame.metersPerInch).toBeCloseTo(6 * 508, 6);
+    expect(frame.stated.widthInches).toBeCloseTo(12, 9);
+  });
+
+  it("keeps a layout's proportions at a set scale", () => {
+    const wide = { size: { widthInches: 8, heightInches: 5 }, metersPerInch: 254, outlineShare: null };
+    const frame = printFrame({ ...wide, sizing: { mode: "scale", denominator: 20_000 } });
+    expect(frame.widthInches).toBeCloseTo(4, 9);
+    expect(frame.heightInches).toBeCloseTo(2.5, 9);
+  });
+
+  it("enlarges a resort's frame so the mountain, not the frame, is the set size", () => {
+    const frame = printFrame({ ...layout, outlineShare: 0.9, sizing: { mode: "size" } });
+    expect(frame.widthInches).toBeCloseTo(6 / 0.9, 9);
+    expect(frame.stated.widthInches).toBeCloseTo(6, 9);
+    // Same ground under a bigger frame: finer scale.
+    expect(frame.widthInches * frame.metersPerInch).toBeCloseTo(6 * 508, 6);
+  });
+
+  it("states the mountain's size, not its frame's, at a set scale", () => {
+    const frame = printFrame({ ...layout, outlineShare: 0.9, sizing: { mode: "scale", denominator: 10_000 } });
+    expect(frame.widthInches).toBeCloseTo(12, 9);
+    expect(frame.stated.widthInches).toBeCloseTo(10.8, 9);
+    expect(denominatorForMetersPerInch(frame.metersPerInch)).toBeCloseTo(10_000, 6);
+  });
+});
+
+describe("clampScaleDenominator", () => {
+  it("rounds, and holds the scale between 1 : 1,000 and 1 : 500,000", () => {
+    expect(clampScaleDenominator(24_999.6)).toBe(25_000);
+    expect(clampScaleDenominator(12)).toBe(1_000);
+    expect(clampScaleDenominator(9e9)).toBe(500_000);
+    expect(clampScaleDenominator(Number.NaN)).toBe(1_000);
+  });
+});
+
+describe("reliefForRescaledPrint", () => {
+  it("doubles the model height when the scale makes the print twice as big", () => {
+    expect(reliefForRescaledPrint(0.75, 20_000, 10_000)).toBeCloseTo(1.5, 9);
+    expect(reliefForRescaledPrint(1.5, 10_000, 20_000)).toBeCloseTo(0.75, 9);
+  });
+
+  it("gives the height back when a scale is tried and put back", () => {
+    const tried = reliefForRescaledPrint(2, 50_000, 5_000);
+    expect(tried).toBeCloseTo(20, 9);
+    expect(reliefForRescaledPrint(tried, 5_000, 50_000)).toBeCloseTo(2, 9);
+  });
+});
+
+describe("parseScaleDenominator", () => {
+  it("reads the ways a scale gets typed", () => {
+    for (const typed of ["25000", "25,000", "25.000", "25 000", " 1:25000 ", "1 : 25,000", "25k", "25K"]) {
+      expect(parseScaleDenominator(typed), typed).toBe(25_000);
+    }
+    expect(parseScaleDenominator("12.5k")).toBe(12_500);
+    expect(parseScaleDenominator("12,5k")).toBe(12_500);
+    expect(parseScaleDenominator("1.250.000")).toBe(MAX_SCALE_DENOMINATOR);
+  });
+
+  it("holds what it reads to the range", () => {
+    expect(parseScaleDenominator("20")).toBe(MIN_SCALE_DENOMINATOR);
+    expect(parseScaleDenominator("2000000")).toBe(MAX_SCALE_DENOMINATOR);
+    expect(parseScaleDenominator("20000.4")).toBe(20_000);
+  });
+
+  it("refuses what isn't a scale", () => {
+    for (const typed of ["", "abc", "0", "-25000", "2:25000", "25kk", "1e5", "25.0.5"]) {
+      expect(parseScaleDenominator(typed), typed).toBeNull();
+    }
+  });
+});
+
+describe("tooLargeToBuild", () => {
+  it("stops a frame over the limit, and one that is no size at all", () => {
+    expect(tooLargeToBuild({ widthInches: 100, heightInches: 40 })).toBe(false);
+    expect(tooLargeToBuild({ widthInches: 100.01, heightInches: 40 })).toBe(true);
+    expect(tooLargeToBuild({ widthInches: NaN, heightInches: 6 })).toBe(true);
+    expect(tooLargeToBuild({ widthInches: Infinity, heightInches: Infinity })).toBe(true);
+  });
+
+  it("stops what a zero scale or a zero share would lead to", () => {
+    const layout = { size: { widthInches: 6, heightInches: 6 }, metersPerInch: 500 };
+    expect(tooLargeToBuild(printFrame({ ...layout, sizing: { mode: "scale", denominator: 0 }, outlineShare: null }))).toBe(true);
+    expect(tooLargeToBuild(printFrame({ ...layout, sizing: { mode: "size" }, outlineShare: 0 }))).toBe(true);
   });
 });

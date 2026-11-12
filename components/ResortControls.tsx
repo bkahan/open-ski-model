@@ -23,6 +23,8 @@ import type { ResortData } from "@/lib/resort/types";
 interface Props {
   settings: ResortSettings;
   onChange: (next: ResortSettings) => void;
+  /** The Resort shape is on, so which runs count as the resort's matters. */
+  resortShape: boolean;
   resort: ResortData | null;
   loading: boolean;
   error: string | null;
@@ -40,6 +42,7 @@ const SCHEME_LABELS: Record<ColorSchemeSetting, string> = {
 export default function ResortControls({
   settings,
   onChange,
+  resortShape,
   resort,
   loading,
   error,
@@ -96,6 +99,24 @@ export default function ResortControls({
           <span className="text-slate-200">Lifts</span>
           <span className="block text-[10px] text-slate-500">
             Chairs, gondolas and surface lifts as thin gray stripes.
+          </span>
+        </span>
+      </label>
+
+      <label className="flex items-start gap-2 text-xs text-slate-300 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={settings.followConnected}
+          disabled={!resortShape}
+          onChange={(e) => set("followConnected", e.target.checked)}
+          className="accent-amber-400 mt-0.5 disabled:opacity-40"
+        />
+        <span className={"leading-snug " + (resortShape ? "" : "opacity-40")}>
+          <span className="text-slate-200">Follow connected runs</span>
+          <span className="block text-[10px] text-slate-500">
+            {resortShape
+              ? "Adds runs the map data doesn't list under the resort but that join its runs, like Sugarloaf's Burnt Mountain. Can also pull in a backcountry trail."
+              : "For the Resort shape."}
           </span>
         </span>
       </label>

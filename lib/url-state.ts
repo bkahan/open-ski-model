@@ -7,6 +7,7 @@
 //   /?b=-122.97,50.10,-122.91,50.14&s=8x6&t=0.25&rh=2&label=Whistler
 
 import { isColorSchemeSetting, type ColorSchemeSetting } from "@/lib/resort/colors";
+import { clampScaleDenominator } from "@/lib/print-fit";
 import { PLACE_MAX_CHARS } from "@/lib/resort/place";
 import { DEFAULT_RESORT_SETTINGS } from "@/lib/resort/settings";
 import type { Shape } from "@/lib/shape";
@@ -23,11 +24,14 @@ export interface UrlState {
   baseThicknessInches: number;
   reliefInches: number;
   aspectLocked: boolean;
+  /** The N of 1 : N when the scale is set and the print size follows; null when the size is set. */
+  scaleDenominator: number | null;
   gridSize: number;
   engraveLabel: boolean;
   engraveBrand: boolean;
   showRuns: boolean;
   showLifts: boolean;
+  followConnected: boolean;
   minRunWidthMm: number;
   colorScheme: ColorSchemeSetting;
   label?: string;
@@ -46,12 +50,14 @@ export function encodeUrlState(s: UrlState): URLSearchParams {
   if (s.areaId) params.set("ra", s.areaId);
   if (s.rotation !== 0) params.set("r", trim(s.rotation));
   if (s.aspectLocked) params.set("lk", "1");
+  if (s.scaleDenominator !== null) params.set("sc", String(Math.round(s.scaleDenominator)));
   if (s.gridSize !== 256) params.set("g", String(Math.round(s.gridSize)));
   if (s.engraveLabel) params.set("el", "1");
   // Default-on toggle: persist "0" only when disabled.
   if (!s.engraveBrand) params.set("eb", "0");
   if (!s.showRuns) params.set("runs", "0");
   if (!s.showLifts) params.set("lf", "0");
+  if (s.followConnected) params.set("fc", "1");
   if (s.minRunWidthMm !== DEFAULT_RESORT_SETTINGS.minRunWidthMm) {
     params.set("mw", trim(s.minRunWidthMm));
   }
@@ -91,6 +97,8 @@ export function decodeUrlState(params: URLSearchParams): Partial<UrlState> {
   const r = params.get("r");
   if (r && Number.isFinite(Number(r))) out.rotation = Number(r);
   if (params.get("lk") === "1") out.aspectLocked = true;
+  const sc = params.get("sc");
+  if (sc && Number.isFinite(Number(sc)) && Number(sc) > 0) out.scaleDenominator = clampScaleDenominator(Number(sc));
   const g = params.get("g");
   if (g && Number.isFinite(Number(g))) out.gridSize = Math.round(Number(g));
   const el = params.get("el");
@@ -99,6 +107,7 @@ export function decodeUrlState(params: URLSearchParams): Partial<UrlState> {
   if (eb === "0") out.engraveBrand = false;
   if (params.get("runs") === "0") out.showRuns = false;
   if (params.get("lf") === "0") out.showLifts = false;
+  if (params.get("fc") === "1") out.followConnected = true;
   const mw = params.get("mw");
   if (mw && Number.isFinite(Number(mw)) && Number(mw) > 0) out.minRunWidthMm = Number(mw);
   const cs = params.get("cs");
