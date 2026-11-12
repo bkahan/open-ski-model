@@ -7,7 +7,6 @@ const base: UrlState = {
   shape: "rectangle",
   silhouette: false,
   areaId: null,
-  layerCount: 0,
   rotation: 0,
   widthInches: 6,
   heightInches: 6,
@@ -31,12 +30,23 @@ describe("model height url state", () => {
     expect(decodeUrlState(params).reliefInches).toBe(1.75);
   });
 
-  it("round-trips the stacked finish and omits it when smooth", () => {
-    expect(encodeUrlState(base).has("ln")).toBe(false);
-    expect(decodeUrlState(encodeUrlState({ ...base, layerCount: 8 })).layerCount).toBe(8);
-    for (const bad of ["abc", "0", "2", "17", "999999999", "4.5"]) {
-      expect(decodeUrlState(new URLSearchParams(`ln=${bad}`)).layerCount).toBeUndefined();
-    }
+  it("ignores the retired stacked-finish setting in an old link", () => {
+    const decoded = decodeUrlState(new URLSearchParams("ln=8&rh=1.5"));
+    expect(decoded).not.toHaveProperty("layerCount");
+    expect(decoded.reliefInches).toBe(1.5);
+  });
+
+  it("round-trips the name plate's second line and omits it when empty", () => {
+    expect(encodeUrlState(base).has("place")).toBe(false);
+    const params = encodeUrlState({ ...base, place: "Carrabassett Valley, ME" });
+    expect(decodeUrlState(params).place).toBe("Carrabassett Valley, ME");
+    expect(decodeUrlState(new URLSearchParams(params.toString())).place).toBe("Carrabassett Valley, ME");
+  });
+
+  it("trims a second line from a link and cuts it to the field's length", () => {
+    expect(decodeUrlState(new URLSearchParams("place=%20%20")).place).toBeUndefined();
+    expect(decodeUrlState(new URLSearchParams("place=%20Jay,%20VT%20")).place).toBe("Jay, VT");
+    expect(decodeUrlState(new URLSearchParams({ place: "x".repeat(200) })).place).toHaveLength(60);
   });
 
   it("round-trips the ski area id", () => {

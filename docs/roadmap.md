@@ -19,8 +19,8 @@ colored by difficulty and lifts as stripes.
   public instances rejected under load ("all query workers are busy").
 - `POST /api/resort` assembles runs and lifts for a bbox from the cells;
   `GET /api/resort/search` ranks ski areas by name.
-- Runs drawn on the 2D map and draped on the 3D terrain as ribbons, one
-  mesh per color. Lifts toggleable. Minimum run width (default 1.2 mm)
+- Runs drawn on the 2D map and, on the 3D terrain, set in as flush color
+  bodies, one per color (first shipped as draped ribbons). Lifts toggleable. Minimum run width (default 1.2 mm)
   widens anything narrower.
 - Color scheme auto-picked by hemisphere (N. America green/blue/black,
   Europe blue/red/black), overridable.
@@ -44,14 +44,41 @@ no visible text. Replacing both:
   downhill direction of runs and lifts, snapped to a face on rectangles
   and hexagons; frame bottom without a resort) with Manifold, glyph by
   glyph so they follow a circular plinth's cone. Cap height is 38% of the
-  chamfer slope (3–9 mm), shrunk to fit. A name that still won't fit at
-  3 mm drops what follows a comma, then a trailing "Resort" / "Ski Area",
+  chamfer slope (6–9 mm, see E5), shrunk to fit. A name that still won't fit at
+  6 mm drops what follows a comma, then a trailing "Resort" / "Ski Area",
   and only then is cut with "…". Hexagon sides are too short to share, so
   the rose gets the next face.
   Fill bodies for each pocket are kept as inlays (previewed dark) for
   multicolor export.
 - E3 (done): STL/STEP export from the Manifold union of terrain and
   plinth. Babylon CSG and the raised-text fallback are gone.
+- E4 (done): a second line under the name for the town and state, set in
+  capitals ("JAY, VT", "ZERMATT, SWITZERLAND"). The name is capped at 35%
+  of the slope, the second line is 70% of that (never under 4.4 mm), both
+  left-aligned, and the rose
+  sits to their right, centered on the pair. The second line is the first
+  thing given up: a plate too short for both lines is laid out exactly as
+  it was with one. Picking a resort fills the line from the ski-area
+  index, then replaces it with a Nominatim reverse lookup at the base
+  area (the lift station most runs finish at), since the index's town is
+  often a hamlet or the next town over. The line is editable and travels
+  in the link as `place`.
+- E5 (done for the plate, open for the brand and the rose): plate text
+  sized and spaced for a 0.4 mm nozzle (`lib/mesh/printable.ts`).
+  - Strokes are thickened until the font's thinnest straight stroke is
+    0.8 mm, two passes of the nozzle. Roboto Regular's bars are 0.108 of
+    the cap height, so anything under 7.4 mm tall is thickened.
+  - Letters are spread by what the thickening took from the gaps, and
+    letters the font sets tight (tt, rt, VT, the L and A of L'A) are
+    moved apart until 0.5 mm of plate is left between any two.
+  - Thickening narrows the openings inside letters. Lower case keeps
+    0.5 mm openings down to 6 mm caps; below that the mouths of a, e, g
+    and s close and the dots of i and j touch their stems. Capitals keep
+    them down to 4.4 mm. Hence a 6 mm floor for the name (it was 3 mm)
+    and capitals for the smaller second line.
+  - Not yet done: the bottom brand (3 mm lower case, 0.38 mm strokes)
+    and the compass letters (the S's openings are about 0.2 mm). Both
+    need a size change that moves other things.
 
 ### Print sizing (done)
 
@@ -75,31 +102,31 @@ no visible text. Replacing both:
 - With the name on, a 4 mm slab follows the outline with a flat tab on
   the base side carrying the name and rose; the brand goes under the tab.
 
-### Stacked finish (done)
+### Multicolor on smooth terrain (done, needs a slicer test)
 
-- Smooth or Stacked, 3–16 flat steps (8 by default). Each step is the
-  terrain's cross-section at that height, smoothed for printing and kept
-  inside the step below. Step heights are whole multiples of 0.2 mm.
-- Runs and lifts are cut into the flat tops as round-jointed grooves, up
-  to 1 mm deep and never more than half a step, and they export with the
-  solid. Contour lines are off.
-
-### Multicolor 3MF (first pass done, needs a slicer test)
-
+- Runs and lifts are solid color bodies set flush into the terrain,
+  0.6 mm deep (three layers). The white body is the terrain with those
+  pockets cut out, so the bodies add back up to the original solid with
+  nothing overlapping. The viewer shows these bodies, and the 3MF carries
+  them. STL and STEP export the white body, so the runs read as grooves.
+- Colors are settled in plan before any solid is cut: crossings go by
+  priority (lifts, black, red, orange, blue, green, gray), regions under
+  0.8 mm wide or 1 mm² are dropped, white walls under 0.4 mm go to the
+  color beside them, and color stops 0.8 mm short of the model's edge.
 - Export 3MF writes one body per filament as one assembly, with filament
   numbers in `Metadata/model_settings.config` for Bambu Studio and Orca.
 - One AMS: white, three trail colors, black lifts and text. Second AMS:
-  every color separate, gray lifts, forest below 60% of the steps.
-- Fills are 3 layers (0.6 mm), lose crossings by priority (lifts, black,
-  red, orange, blue, green), and drop regions under 0.8 mm wide.
+  every color separate, gray lifts, forest below 60% of the relief.
+- The Stacked finish (flat elevation steps with grooved runs) was removed:
+  the product is smooth only, and its step-building lost geometry on real
+  resorts. An old link's `ln` setting is ignored.
+- Still open: preview colors come from the trail scheme, not the filament
+  list, so lifts preview gray and print black on one AMS.
 
 ### Phase R2 — inlay bodies
 
-- Turn each color group into a solid: ribbon extruded ~0.8 mm down into
-  the terrain, CSG-subtracted from the base, flush top.
-- Color budget: merge groups to fit the slots available (4-slot AMS:
-  white base + 3 colors).
-- Lift terminals as small bumps.
+- Done as color bodies on smooth terrain, above. Left from the original
+  list: lift terminals as small bumps.
 
 ### Phase R3 — multicolor export
 

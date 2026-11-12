@@ -46,12 +46,18 @@ box, get a watertight `.stl` you can hand to your slicer.
   and lifts; the frame's bottom edge when there is no resort), so on a
   circular plinth they follow the cone. Cap height comes
   from the chamfer slope and shrinks (then shortens with "…") to fit the
-  face, never below 3 mm. The pocket fill bodies are kept as separate
-  inlays for multicolor printing.
+  face, never below 6 mm. Plate text is laid out for a 0.4 mm nozzle:
+  strokes thickened to 0.8 mm, letters spaced so at least 0.5 mm of
+  plate is left between any two of them. The pocket fill bodies are kept as
+  separate inlays for multicolor printing.
 - **Optional plinth + engravings.**
   - *Label + compass:* a beveled plinth wraps the model and the place
     name + an N/E/S/W compass rose are inlaid into the rim on the base
-    side, tilted 35° so they face up on a desk.
+    side, tilted 35° so they face up on a desk. A second, smaller line
+    under the name takes the town and state in capitals ("JAY, VT"), with the rose
+    beside the pair. Picking a resort fills it in: from the ski-area index
+    at once, then from an OpenStreetMap (Nominatim) lookup at the resort's
+    base area. Edit it, or clear it for one line.
   - *Brand on bottom:* `craftedcarving.com` engraved into the bottom
     face. Independent toggle.
 
@@ -80,7 +86,7 @@ box, get a watertight `.stl` you can hand to your slicer.
   [OpenSkiData](https://openskidata.org) (OpenSkiMap's processed OSM
   data), rebuilt weekly by a GitHub Action into 1° cells on the `data`
   branch and served through jsDelivr, so no query server sits in the
-  request path. They're drawn on the map and draped on the 3D terrain,
+  request path. They're drawn on the map and set into the 3D terrain,
   colored by difficulty. The search box lists ski resorts from the same
   dataset; picking one turns and fits the frame to the resort's natural
   viewport. Trail colors follow the convention the data was tagged under
@@ -191,7 +197,7 @@ are fused in by position dedup so the export stays a single solid.
 ## URL state
 
 ```
-/?b=W,S,E,N&sh=shape&r=rot&s=WxH&lk=1&g=grid&el=1&eb=0&t=baseInches&v=exag&label=Name
+/?b=W,S,E,N&sh=shape&r=rot&s=WxH&lk=1&g=grid&el=1&eb=0&t=baseInches&v=exag&label=Name&place=Town
 ```
 
 | Key     | Meaning                                                |
@@ -208,12 +214,12 @@ are fused in by position dedup so the export stays a single solid.
 | `rh`    | model height, base to peak, in inches                  |
 | `ol`    | `1` to cut the model to the resort's outline           |
 | `ra`    | ski area id, keeps neighbors out of the outline        |
-| `ln`    | stacked finish: number of steps (omitted when smooth)  |
 | `runs`  | `0` to hide ski runs (on by default)                   |
 | `lf`    | `0` to hide lifts (on by default)                      |
 | `mw`    | minimum run width in mm (omitted at the default 1.2)   |
 | `cs`    | trail color scheme `na` \| `eu` (omitted when auto)    |
 | `label` | display name (URL-encoded)                             |
+| `place` | second line of the name plate, e.g. `Jay, VT` (omitted when empty) |
 
 Example:
 
@@ -254,6 +260,7 @@ lib/
   resort/
     skidata.ts             Data-branch cell reader + ski-area search (server)
     request.ts             /api/resort request validation
+    place.ts               Town + state for the name plate's second line
     colors.ts              Difficulty → color per scheme
     geojson.ts             Resort data → GeoJSON for the map
     settings.ts            Run settings defaults + limits
@@ -266,12 +273,13 @@ lib/mesh/
     engrave.ts             Plinth + name plate + brand + export union
     plinth.ts              Chamfered plinth solid (hull of offset outlines)
     nameplate.ts           Glyph placement on the chamfer, font fitting
+    printable.ts           Stroke thickening and letter spacing for a 0.4 mm nozzle
     compass.ts             Compass rose outlines
     silhouette.ts          Resort outline, slab and name tab
-    layers.ts              Stacked finish: flat elevation steps
+    inlays.ts              Runs + lifts as flush color bodies, one per filament
     text.ts                Font loading, glyph outlines, text solids
     watertight.ts          Build closed VertexData from height grid
-    runs.ts                Drape runs + lifts as ribbons, one per color
+    runs.ts                Runs + lifts on the model plane, grouped by color
     contours.ts            Marching squares contour lines
     plinth.ts              Beveled plinth around the model
     compass.ts             North-arrow indicator geometry

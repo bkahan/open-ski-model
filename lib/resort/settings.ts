@@ -3,7 +3,7 @@ import type { ColorSchemeSetting } from "./colors";
 export interface ResortSettings {
   showRuns: boolean;
   showLifts: boolean;
-  /** Printable minimum ribbon width; narrower runs are widened to this. */
+  /** Printable minimum line width; narrower runs are widened to this. */
   minRunWidthMm: number;
   colorScheme: ColorSchemeSetting;
 }

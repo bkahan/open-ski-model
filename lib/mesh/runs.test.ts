@@ -4,18 +4,11 @@ import type { ElevationResponse } from "@/lib/elevation/types";
 import type { ResortData } from "@/lib/resort/types";
 import type { Bbox } from "@/lib/types";
 
-import { grooveDepthFor } from "./layers";
-import {
-  buildRunRibbons,
-  resortFrontBearing,
-  resortGrooveGroups,
-  resortLinesOnPlane,
-  terrainLayersFor,
-  type RunMeshSpec,
-} from "./runs";
+import { resortFrontBearing, resortInlayGroups, resortLinesOnPlane, type PlaneSpec } from "./runs";
 
 // 6" square frame centered on Jay Peak; roughly 1:33,000.
 const bbox: Bbox = [-72.53, 44.91, -72.47, 44.95];
+const INCHES_PER_METER = 6 / 4723;
 
 function flatGrid(size: number, elevation: number): ElevationResponse {
   return {
@@ -29,24 +22,14 @@ function flatGrid(size: number, elevation: number): ElevationResponse {
   };
 }
 
-function spec(resort: ResortData, overrides: Partial<RunMeshSpec> = {}): RunMeshSpec {
-  return {
-    bbox,
-    data: flatGrid(16, 500),
-    shape: "rectangle",
-    widthInches: 6,
-    heightInches: 6,
-    rotation: 0,
-    baseThicknessInches: 0.25,
-    verticalExaggeration: 2,
-    resort,
-    scheme: "na",
-    showLifts: true,
-    minWidthMm: 1.2,
-    lift: 0.01,
-    ...overrides,
-  };
-}
+const plane: PlaneSpec = {
+  bbox,
+  data: flatGrid(16, 500),
+  shape: "rectangle",
+  widthInches: 6,
+  heightInches: 6,
+  rotation: 0,
+};
 
 const centerRun = {
   id: "1",
@@ -59,91 +42,75 @@ const centerRun = {
   isArea: false,
 };
 
-describe("buildRunRibbons", () => {
-  it("groups by color and sits just above the terrain", () => {
-    const resort: ResortData = {
-      runs: [
+function resortOf(runs: ResortData["runs"], lifts: ResortData["lifts"] = []): ResortData {
+  return { runs, lifts, bbox, extent: bbox, convention: "north_america" };
+}
+
+const style = { scheme: "na" as const, showLifts: true, minWidthMm: 1.2 };
+
+describe("resortInlayGroups", () => {
+  const chair = { id: "9", type: "chair_lift" as const, coords: centerRun.coords };
+
+  it("groups by color, highest priority first", () => {
+    const resort = resortOf(
+      [
         centerRun,
         { ...centerRun, id: "2", difficulty: "intermediate" },
         { ...centerRun, id: "3", difficulty: "expert" },
         { ...centerRun, id: "4", difficulty: "advanced" },
       ],
-      lifts: [{ id: "9", type: "chair_lift", coords: centerRun.coords }],
-      bbox,
-      extent: bbox,
-      convention: "north_america",
-    };
-    const groups = buildRunRibbons(spec(resort));
-    const byName = Object.fromEntries(groups.map((g) => [g.name, g]));
-    expect(Object.keys(byName).sort()).toEqual(["black", "blue", "green", "lift"]);
-    expect(byName.black.count).toBe(2);
-
-    const positions = byName.green.vertexData.positions as Float32Array;
-    for (let i = 1; i < positions.length; i += 3) {
-      expect(positions[i]).toBeCloseTo(0.25 + 0.01, 5);
-    }
+      [chair],
+    );
+    const groups = resortInlayGroups({ ...plane, resort, ...style });
+    expect(groups.map((g) => g.key)).toEqual(["lift", "black", "blue", "green"]);
+    expect(groups[1].paths).toHaveLength(2);
   });
 
-  it("widens narrow runs to the minimum printable width", () => {
-    const resort: ResortData = { runs: [centerRun], lifts: [], bbox, extent: bbox, convention: "north_america" };
-    const [green] = buildRunRibbons(spec(resort, { minWidthMm: 2.54 }));
-    const positions = green.vertexData.positions as Float32Array;
-    // First cross-section: left and right vertices straddle the centerline
-    // by half the width (z axis, since the run heads east).
-    const widthIn = Math.abs(positions[2] - positions[5]);
-    expect(widthIn).toBeCloseTo(0.1, 3);
+  it("puts each line where its coordinates fall on the print", () => {
+    const [green] = resortInlayGroups({ ...plane, resort: resortOf([centerRun]), ...style });
+    const [[westX, westZ], [eastX, eastZ]] = green.paths[0].points;
+    // The run crosses the frame's center from west to east, 0.02 degrees long.
+    expect(westX).toBeCloseTo(-eastX, 6);
+    expect(westZ).toBeCloseTo(0, 6);
+    expect(eastZ).toBeCloseTo(0, 6);
+    expect(eastX - westX).toBeCloseTo(2, 1);
   });
 
-  it("drops lifts when disabled and runs outside the footprint", () => {
-    const outside = {
-      ...centerRun,
-      id: "5",
-      coords: [
-        [-72.6, 44.8],
-        [-72.59, 44.8],
-      ] as [number, number][],
-    };
-    const resort: ResortData = {
-      runs: [outside],
-      lifts: [{ id: "9", type: "gondola", coords: centerRun.coords }],
-      bbox,
-      extent: bbox,
-      convention: "north_america",
-    };
-    expect(buildRunRibbons(spec(resort, { showLifts: false }))).toEqual([]);
-    expect(buildRunRibbons(spec(resort)).map((g) => g.name)).toEqual(["lift"]);
+  it("prints a run at its real width when that is wide enough", () => {
+    const [green] = resortInlayGroups({ ...plane, resort: resortOf([centerRun]), ...style, minWidthMm: 0.4 });
+    expect(green.paths[0].halfWidth).toBeCloseTo((30 * INCHES_PER_METER) / 2, 3);
   });
 
-  it("clips a run that crosses a circular footprint into separate strips", () => {
-    const crossing = {
-      ...centerRun,
-      coords: [
-        [-72.53, 44.95],
-        [-72.47, 44.91],
-      ] as [number, number][],
-    };
-    const resort: ResortData = { runs: [crossing], lifts: [], bbox, extent: bbox, convention: "north_america" };
-    const [green] = buildRunRibbons(spec(resort, { shape: "circle" }));
-    const positions = green.vertexData.positions as Float32Array;
-    const r = 3;
-    for (let i = 0; i < positions.length; i += 3) {
-      const d = Math.hypot(positions[i], positions[i + 2]);
-      expect(d).toBeLessThanOrEqual(r + 0.1);
-    }
+  it("widens anything narrower than the printable minimum", () => {
+    const groups = resortInlayGroups({ ...plane, resort: resortOf([centerRun], [chair]), ...style, minWidthMm: 2.54 });
+    for (const group of groups) expect(group.paths[0].halfWidth).toBeCloseTo(0.05, 6);
+  });
+
+  it("leaves lifts out when they are switched off", () => {
+    const resort = resortOf([centerRun], [chair]);
+    expect(resortInlayGroups({ ...plane, resort, ...style, showLifts: false }).map((g) => g.key)).toEqual(["green"]);
+  });
+
+  it("leaves out polygon runs and lines tagged only to another ski area", () => {
+    const resort = resortOf([
+      { ...centerRun, areas: ["jay"] },
+      { ...centerRun, id: "2", difficulty: "expert", areas: ["burke"] },
+      { ...centerRun, id: "3", difficulty: "intermediate", isArea: true },
+    ]);
+    expect(resortInlayGroups({ ...plane, resort, areaId: "jay", ...style }).map((g) => g.key)).toEqual(["green"]);
+    expect(resortInlayGroups({ ...plane, resort, ...style }).map((g) => g.key)).toEqual(["black", "green"]);
   });
 });
 
 describe("resortLinesOnPlane", () => {
   it("leaves out polygon runs, which aren't drawn", () => {
-    const lines = resortLinesOnPlane(
-      spec({
-        runs: [centerRun, { ...centerRun, id: "zone", isArea: true }],
-        lifts: [{ id: "9", type: "chair_lift", coords: centerRun.coords }],
-        bbox,
-        extent: bbox,
-        convention: "north_america",
-      }),
-    );
+    const lines = resortLinesOnPlane({
+      ...plane,
+      resort: resortOf(
+        [centerRun, { ...centerRun, id: "zone", isArea: true }],
+        [{ id: "9", type: "chair_lift", coords: centerRun.coords }],
+      ),
+    });
     expect(lines).toHaveLength(2);
   });
 
@@ -160,77 +127,8 @@ describe("resortLinesOnPlane", () => {
       extent: bbox,
       convention: "north_america",
     };
-    expect(resortLinesOnPlane({ ...spec(resort), areaId: "jay" })).toHaveLength(3);
-    expect(resortLinesOnPlane(spec(resort))).toHaveLength(4);
-  });
-});
-
-describe("stacked terrain", () => {
-  const size = 64;
-  const slope: ElevationResponse = {
-    heights: Array.from({ length: size * size }, (_, k) => 500 + (k % size) * 12),
-    width: size,
-    height: size,
-    min: 500,
-    max: 500 + (size - 1) * 12,
-    source: "terrarium",
-    zoom: 12,
-  };
-  const plane = {
-    bbox,
-    data: slope,
-    shape: "rectangle" as const,
-    widthInches: 6,
-    heightInches: 6,
-    rotation: 0,
-    baseThicknessInches: 0.25,
-    verticalExaggeration: 2,
-  };
-  const resort: ResortData = {
-    runs: [centerRun],
-    lifts: [],
-    bbox,
-    extent: bbox,
-    convention: "north_america",
-  };
-
-  it("measures the levels over the part of the terrain that is kept", () => {
-    const whole = terrainLayersFor({ ...plane, count: 6 })!;
-    const eastOnly = terrainLayersFor({ ...plane, count: 6, insideOutline: (x) => x > 0 })!;
-    expect(whole.levels).toHaveLength(7);
-    expect(whole.levels[0]).toBeCloseTo(0.25, 6);
-    expect(eastOnly.levels[0]).toBeGreaterThan(whole.levels[0]);
-    expect(whole.baseY).toBe(0.25);
-  });
-
-  it("returns null when nothing is kept", () => {
-    expect(terrainLayersFor({ ...plane, count: 6, insideOutline: () => false })).toBeNull();
-  });
-
-  it("groups grooves by color, highest priority first, at printed widths", () => {
-    const withLift: ResortData = {
-      ...resort,
-      lifts: [{ id: "9", type: "chair_lift", coords: centerRun.coords }],
-    };
-    const groups = resortGrooveGroups({ ...plane, resort: withLift, scheme: "na", showLifts: true, minWidthMm: 1.2 });
-    expect(groups.map((g) => g.key)).toEqual(["lift", "green"]);
-    expect(groups[0].paths[0].halfWidth).toBeCloseTo(1.2 / 25.4 / 2, 6);
-    expect(resortGrooveGroups({ ...plane, resort: withLift, scheme: "na", showLifts: false, minWidthMm: 1.2 }).map((g) => g.key)).toEqual(["green"]);
-  });
-
-  it("keeps ribbons on the flat tops, with no quad spanning a step", () => {
-    const layerLevels = terrainLayersFor({ ...plane, count: 6 })!.levels;
-    const [green] = buildRunRibbons(spec(resort, { data: slope, layerLevels }));
-    const positions = green.vertexData.positions as Float32Array;
-    const indices = green.vertexData.indices as Uint32Array;
-    const sink = grooveDepthFor(layerLevels);
-    const onATop = (y: number) => layerLevels.some((l) => Math.abs(l - sink + 0.01 - y) < 1e-4);
-    for (let i = 1; i < positions.length; i += 3) expect(onATop(positions[i])).toBe(true);
-    for (let t = 0; t < indices.length; t += 3) {
-      const a = positions[indices[t] * 3 + 1];
-      expect(positions[indices[t + 1] * 3 + 1]).toBeCloseTo(a, 5);
-      expect(positions[indices[t + 2] * 3 + 1]).toBeCloseTo(a, 5);
-    }
+    expect(resortLinesOnPlane({ ...plane, resort, areaId: "jay" })).toHaveLength(3);
+    expect(resortLinesOnPlane({ ...plane, resort })).toHaveLength(4);
   });
 });
 
@@ -244,7 +142,7 @@ describe("resortFrontBearing", () => {
     }
     return { heights, width: size, height: size, min: 0, max: 1000, source: "terrarium", zoom: 12 };
   }
-  const plane = { bbox, data: tilted(16), shape: "rectangle" as const, widthInches: 6, heightInches: 6, rotation: 0 };
+  const tiltedPlane: PlaneSpec = { ...plane, data: tilted(16) };
 
   it("maps lng/lat onto the plane the right way round", () => {
     // A run drawn uphill (east to west) still counts as descending east;
@@ -256,7 +154,7 @@ describe("resortFrontBearing", () => {
       extent: bbox,
       convention: "north_america",
     };
-    const bearing = resortFrontBearing({ ...plane, resort })!;
+    const bearing = resortFrontBearing({ ...tiltedPlane, resort })!;
     expect(bearing).toBeGreaterThan(45);
     expect(bearing).toBeLessThan(90);
   });
@@ -269,6 +167,6 @@ describe("resortFrontBearing", () => {
       extent: bbox,
       convention: "north_america",
     };
-    expect(resortFrontBearing({ ...plane, resort })).toBeNull();
+    expect(resortFrontBearing({ ...tiltedPlane, resort })).toBeNull();
   });
 });

@@ -17,16 +17,14 @@ import {
   END_MARGIN_CAPS,
   fitPlateContent,
   OVERCUT_IN,
+  plateGlyphs,
+  plateTextWidth,
   POCKET_DEPTH_IN,
   ROSE_GAP_CAPS,
   type NameplateLayout,
 } from "./nameplate";
-import {
-  fontSizeForCapHeight,
-  layoutGlyphs,
-  measureTextWidth,
-  type Contour,
-} from "./text";
+import { thickenedContours } from "./printable";
+import type { Contour } from "./text";
 
 const MM_PER_INCH = 25.4;
 
@@ -52,7 +50,7 @@ const TAB_MIN_LENGTH_IN = 2.25;
 const TAB_MIN_USABLE_IN = 2.5;
 const SLAB_ROUNDING_IN = 3 / MM_PER_INCH;
 
-function signedArea(ring: Contour): number {
+export function signedArea(ring: Contour): number {
   let sum = 0;
   for (let i = 0; i < ring.length; i++) {
     const [ax, ay] = ring[i];
@@ -174,8 +172,8 @@ export function buildResortOutline(
 
 /**
  * Point-in-outline test snapped to the elevation grid, filled by scanline.
- * Contour lines and run ribbons ask this for every cell and sample, which
- * would be too slow against the polygon itself.
+ * Contour lines ask this for every cell, which would be too slow against
+ * the polygon itself.
  */
 export function outlineMask(
   outline: Contour,
@@ -213,7 +211,7 @@ export function outlineMask(
 }
 
 /** Extrude plane contours straight up from y = 0. */
-function prismFromSection(section: CrossSection, height: number): Manifold {
+export function prismFromSection(section: CrossSection, height: number): Manifold {
   // A section's y becomes -z when stood up, so z is negated going in.
   const mirrored = section.scale([1, -1]);
   try {
@@ -240,6 +238,8 @@ export function outlinePrism(m: ManifoldToplevel, outline: Contour, height: numb
 export interface OutlinePlinthSpec {
   outline: Contour;
   label: string;
+  /** Second line under the name, such as "Jay, VT". */
+  place?: string;
   compass: boolean;
   /** Bearing the tab should sit on, degrees clockwise from north. Defaults to south. */
   facing?: number;
@@ -278,6 +278,7 @@ function placeTab(
 
   const layout = fitPlateContent(font, {
     label: spec.label.trim(),
+    place: spec.place?.trim(),
     compass: spec.compass,
     usable: Math.max(TAB_MIN_USABLE_IN, maxX - minX),
     slope: TAB_ROSE_DIAMETER_IN,
@@ -297,9 +298,7 @@ function placeTab(
 }
 
 function contentWidth(font: opentype.Font, layout: NameplateLayout): number {
-  const text = layout.text
-    ? measureTextWidth(font, layout.text, fontSizeForCapHeight(font, layout.capInches))
-    : 0;
+  const text = plateTextWidth(font, layout);
   const rose = layout.compass ? TAB_ROSE_DIAMETER_IN : 0;
   const gap = layout.text && layout.compass ? ROSE_GAP_CAPS * layout.capInches : 0;
   return text + gap + rose;
@@ -390,17 +389,13 @@ export function buildOutlinePlinth(
   try {
     if (layout) {
       const startX = centerX - contentWidth(font, layout) / 2;
-      const cap = layout.capInches;
       let textEnd = startX;
       if (layout.text) {
-        const size = fontSizeForCapHeight(font, cap);
-        for (const glyph of layoutGlyphs(font, layout.text, size)) {
-          const contours = glyph.contours.map((c) =>
-            c.map(([x, y]): [number, number] => [x - glyph.centerX, y - cap / 2]),
-          );
-          solids.push(flatPocket(m, contours, startX + glyph.centerX, tabZ, spin));
+        for (const glyph of plateGlyphs(font, layout)) {
+          const outline = thickenedContours(m, glyph.contours, glyph.grow);
+          solids.push(flatPocket(m, outline, startX + glyph.centerX, tabZ, spin));
         }
-        textEnd = startX + measureTextWidth(font, layout.text, size) + ROSE_GAP_CAPS * cap;
+        textEnd = startX + plateTextWidth(font, layout) + ROSE_GAP_CAPS * layout.capInches;
       }
       if (layout.compass) {
         const rose = compassRoseContours(m, font, TAB_ROSE_DIAMETER_IN, -spin);
