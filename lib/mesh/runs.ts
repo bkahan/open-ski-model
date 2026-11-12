@@ -9,6 +9,7 @@ import { bboxCenter, bboxWidthMeters, metersPerDegLng } from "@/lib/bbox";
 import type { ElevationResponse } from "@/lib/elevation/types";
 import type { InlayGroup, InlayPath } from "@/lib/mesh/inlays";
 import { LIFT_COLOR, runColor, type ColorScheme } from "@/lib/resort/colors";
+import { resortLines } from "@/lib/resort/frame";
 import { frontBearing } from "@/lib/resort/front";
 import type { ResortData } from "@/lib/resort/types";
 import { pointInShape, shapeAABBHalf, type Shape } from "@/lib/shape";
@@ -22,9 +23,8 @@ const DEFAULT_RUN_WIDTH_M = 30;
 const DEFAULT_LIFT_WIDTH_M = 8;
 
 /** The inputs that fix how lng/lat maps onto the model plane. */
-export interface PlaneSpec {
+export interface FrameSpec {
   bbox: Bbox;
-  data: ElevationResponse;
   shape: Shape;
   /** Shape pre-rotation dimensions in inches. */
   widthInches: number;
@@ -32,15 +32,21 @@ export interface PlaneSpec {
   rotation: number;
 }
 
+/** A frame with the terrain sampled over it. */
+export interface PlaneSpec extends FrameSpec {
+  data: ElevationResponse;
+}
+
 interface Plane {
   geoToLocal: (p: LngLat) => [number, number];
+  localToGeo: (p: [number, number]) => LngLat;
   /** Full extent of the elevation grid in inches (the rotated shape's AABB). */
   gridW: number;
   gridH: number;
   inPerMeter: number;
 }
 
-function modelPlane(spec: PlaneSpec): Plane {
+function modelPlane(spec: FrameSpec): Plane {
   const { bbox, shape, widthInches, heightInches, rotation } = spec;
   const [aabbHalfW, aabbHalfH] = shapeAABBHalf(shape, widthInches, heightInches, rotation);
   const gridW = aabbHalfW * 2;
@@ -52,6 +58,10 @@ function modelPlane(spec: PlaneSpec): Plane {
     geoToLocal: ([lng, lat]) => [
       (lng - center[0]) * mPerDegLng * inPerMeter,
       (lat - center[1]) * METERS_PER_DEG_LAT * inPerMeter,
+    ],
+    localToGeo: ([x, z]) => [
+      center[0] + x / (mPerDegLng * inPerMeter),
+      center[1] + z / (METERS_PER_DEG_LAT * inPerMeter),
     ],
     gridW,
     gridH,
@@ -122,21 +132,29 @@ export function resortInlayGroups(
 }
 
 /**
- * Every drawn run and lift as a polyline in the model plane, for tracing an
- * outline. Polygon runs are left out: they aren't drawn, and a backcountry
- * zone mapped as one would add a piece of model with nothing on it. So
- * are lines tagged only to another ski area: neighbors like Alta and
- * Snowbird touch, and would otherwise merge into one shape.
+ * The runs and lifts to trace an outline around, as polylines in the model
+ * plane. For a ski area these are the same lines its frame was fitted to
+ * (resortLines), so the outline stays inside that frame; lines tagged
+ * only to another area are left out, since neighbors like Alta and
+ * Snowbird touch and would otherwise merge into one shape. Without an
+ * area it is every drawn line. Polygon runs are never included: they
+ * aren't drawn, and a backcountry zone mapped as one would add a piece of
+ * model with nothing on it.
  */
 export function resortLinesOnPlane(
-  spec: PlaneSpec & { resort: ResortData; areaId?: string | null },
+  spec: FrameSpec & { resort: ResortData; areaId?: string | null },
 ): Array<Array<[number, number]>> {
   const { geoToLocal } = modelPlane(spec);
-  const { areaId } = spec;
-  const drawn = [...spec.resort.runs.filter((r) => !r.isArea), ...spec.resort.lifts];
-  return drawn
-    .filter((line) => !areaId || !line.areas?.length || line.areas.includes(areaId))
-    .map((line) => line.coords.map(geoToLocal));
+  const lines = spec.areaId
+    ? resortLines(spec.resort, spec.areaId)
+    : [...spec.resort.runs.filter((r) => !r.isArea), ...spec.resort.lifts];
+  return lines.map((line) => line.coords.map(geoToLocal));
+}
+
+/** Points of the model plane (x east, z north, inches) back on the map. */
+export function planePointsOnMap(spec: FrameSpec, points: Array<[number, number]>): LngLat[] {
+  const { localToGeo } = modelPlane(spec);
+  return points.map(localToGeo);
 }
 
 type HeightSampler = (x: number, z: number) => number;
