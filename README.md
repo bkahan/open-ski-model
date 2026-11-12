@@ -212,7 +212,7 @@ are fused in by position dedup so the export stays a single solid.
 | `eb`    | `0` to disable the bottom brand engraving (on by default) |
 | `t`     | base thickness, inches                                 |
 | `rh`    | model height, base to peak, in inches                  |
-| `ol`    | `1` to cut the model to the resort's outline           |
+| `ol`    | `1` for the Resort shape: the outline of ski area `ra` |
 | `ra`    | ski area id, keeps neighbors out of the outline        |
 | `runs`  | `0` to hide ski runs (on by default)                   |
 | `lf`    | `0` to hide lifts (on by default)                      |
@@ -276,6 +276,7 @@ lib/mesh/
     printable.ts           Stroke thickening and letter spacing for a 0.4 mm nozzle
     compass.ts             Compass rose outlines
     silhouette.ts          Resort outline, slab and name tab
+    resort-outline.ts      Traces the outline for both the map and the model
     inlays.ts              Runs + lifts as flush color bodies, one per filament
     text.ts                Font loading, glyph outlines, text solids
     watertight.ts          Build closed VertexData from height grid

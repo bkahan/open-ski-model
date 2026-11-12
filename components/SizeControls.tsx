@@ -11,6 +11,8 @@
 //   - The aspect-lock toggle ties width to height for the print.
 //   - For circle / hexagon, the print is described by a single diameter
 //     (since aspect is fixed by the shape).
+//   - The Resort shape has one size too, and its coverage is read-only:
+//     the ground it covers is the resort's, fitted for it.
 
 import { bboxWidthMeters } from "@/lib/bbox";
 import {
@@ -35,6 +37,8 @@ export interface SizeState {
 interface Props {
   size: SizeState;
   shape: Shape;
+  /** The footprint is a resort's outline in a square frame fitted to it. */
+  resortMode: boolean;
   rotation: number;
   onChange: (next: SizeState) => void;
   bbox: Bbox | null;
@@ -47,6 +51,7 @@ interface Props {
 export default function SizeControls({
   size,
   shape,
+  resortMode,
   rotation,
   onChange,
   bbox,
@@ -93,7 +98,21 @@ export default function SizeControls({
           Print size
         </legend>
 
-        {isCircleOrHex ? (
+        {resortMode ? (
+          <>
+            <LabeledNumber
+              label="Size (in)"
+              value={size.widthInches}
+              min={2}
+              max={24}
+              step={0.5}
+              onChange={(v) => onChange({ ...size, widthInches: v, heightInches: v })}
+            />
+            <p className="text-xs text-slate-500">
+              The square the resort is fitted in. The resort itself prints a little smaller.
+            </p>
+          </>
+        ) : isCircleOrHex ? (
           <LabeledNumber
             label="Diameter (in)"
             value={size.widthInches}
@@ -201,16 +220,22 @@ export default function SizeControls({
         <legend className="text-slate-400 uppercase tracking-wider text-xs mb-1">
           Real-world coverage
         </legend>
-        <LabeledNumber
-          label={isCircleOrHex ? "Diameter (km)" : "Width (km)"}
-          value={Math.round(shapeWidthKm * 100) / 100}
-          min={0.5}
-          max={50}
-          step={0.5}
-          onChange={(v) => onShapeWidthMetersChange(v * 1000)}
-        />
+        {resortMode ? (
+          <div className="text-xs text-slate-400">
+            Width: <span className="font-mono">{shapeWidthKm.toFixed(2)} km</span>, set by the resort.
+          </div>
+        ) : (
+          <LabeledNumber
+            label={isCircleOrHex ? "Diameter (km)" : "Width (km)"}
+            value={Math.round(shapeWidthKm * 100) / 100}
+            min={0.5}
+            max={50}
+            step={0.5}
+            onChange={(v) => onShapeWidthMetersChange(v * 1000)}
+          />
+        )}
         <div className="text-xs text-slate-400">
-          {isCircleOrHex ? null : (
+          {isCircleOrHex || resortMode ? null : (
             <>
               Height: <span className="font-mono">{shapeHeightKm.toFixed(2)} km</span>
               {" "}&middot;{" "}
