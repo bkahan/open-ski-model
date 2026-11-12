@@ -1,5 +1,30 @@
 # Roadmap
 
+## Status
+
+As of 2026-11-11. "Not verified" means no print or slicer check is
+recorded here.
+
+| Work | Status | Section |
+|------|--------|---------|
+| Map, elevation, mesh, STL/STEP, links, PWA | In `main` | Done |
+| Resort data, runs and lifts on map and model | In `main` | Phase R1 |
+| Manifold engraving, plinth, name, rose, second line | In `main`, not verified | E1–E4 |
+| Plate text sized for a 0.4 mm nozzle | In `main`, not verified | E5 |
+| Resort shape: outline on the map, fitted frame (#9) | In `main`, not verified | Resort silhouette |
+| Size set by size or by scale 1 : N (#10) | In `main`, not verified | Print sizing |
+| Follow connected runs (#11) | In `main`, not verified | Resort silhouette |
+| Color bodies and 3MF export | In `main`, needs a slicer test | Multicolor |
+| Filament colors and types that reach the slicer | Not started | Multicolor |
+| Preview colors from the filament list | Not started | Multicolor |
+| Brand text and compass letters for a 0.4 mm nozzle | Not started | E5 |
+| Tiling or puzzle-cut past the bed | Not started | Print sizing |
+| Printer profile (bed, nozzle) | Not started | Print sizing |
+| Model height slider past 4 in | Not started | Print sizing |
+| Lift terminals as bumps | Not started | Phase R2 |
+| Zip of per-color STLs | Not started | Phase R3 |
+| Forest areas, snowline, markers, Serwist | Not started | Phase R4 |
+
 ## Done
 
 - Phases 1–3: map picker, server-side elevation (terrarium + USGS 3DEP),
@@ -24,10 +49,11 @@ colored by difficulty and lifts as stripes.
   widens anything narrower.
 - Color scheme auto-picked by hemisphere (N. America green/blue/black,
   Europe blue/red/black), overridable.
-- Picking a ski resort in search turns and fits the frame to the resort's
-  natural viewport (OpenSkiData's `viewportHint`); picking a place frames
-  around whatever runs are nearby.
-- Settings mirrored in the URL (`runs`, `lf`, `mw`, `cs`).
+- Picking a ski resort in search turns the frame to the bearing of the
+  resort's natural viewport (OpenSkiData's `viewportHint`) and fits it to
+  the resort's own lines (`frameAroundResort`, see Resort silhouette);
+  picking a place frames around whatever runs are nearby.
+- Settings mirrored in the URL (`runs`, `lf`, `mw`, `cs`, `fc`).
 
 ### Engraving rework (done)
 
@@ -80,8 +106,16 @@ no visible text. Replacing both:
     and the compass letters (the S's openings are about 0.2 mm). Both
     need a size change that moves other things.
 
-### Print sizing (done)
+### Print sizing (done, in `main` via #10)
 
+- Code: `lib/print-fit.ts` (`Sizing`, `printFrame`,
+  `parseScaleDenominator`, `tooLargeToBuild`) and
+  `components/SizeControls.tsx`. A set scale travels in a link as `sc`.
+- Tested: unit tests in `lib/print-fit.test.ts` (`printFrame` in both
+  modes, scale parsing and clamping, the build limit) and
+  `lib/url-state.test.ts` (`sc`). Exported 3MFs of Jay Peak measured
+  152.4 mm at 6 in and 265.2 mm at 1 : 10,000. Not verified: no print
+  or slicer check of a model sized either way is recorded.
 - The print holds its size (6" by default). Dragging the frame changes the
   ground it covers and the map scale, not the inches; changing the inches
   keeps the ground.
@@ -90,12 +124,13 @@ no visible text. Replacing both:
 - Two ways to size (`lib/print-fit.ts`, `printFrame`):
   - Set size: as above. For the Resort shape the size is the mountain's
     longest side, measured square to its frame, and the hidden frame is
-    built that much bigger (the outline is about 95% of its frame). The
-    name tab is extra.
+    built that much bigger (by the outline's traced share of its frame,
+    `outlineShare`, about 95%). The name tab is extra.
   - Set scale: 1 : N is typed or picked (10k to 50k presets, 1,000 to
     500,000 allowed) and the print comes out however big the covered
     ground is at it. The panel reads the size back in inches and mm, and
-    says when it is past a 256 mm bed. Nothing over 100 in is built.
+    says when it is past a 256 mm bed. Nothing over 100 in is built
+    (`tooLargeToBuild`).
     Changing N keeps the vertical exaggeration by scaling the model
     height with it. The field takes "25,000", "1:25000" and "25k".
 - The panel's size and the frame on the map stay a "layout" that every
@@ -109,13 +144,22 @@ no visible text. Replacing both:
   not retrace it.
 - Generate waits for the outline's trace whenever the frame it is
   traced in has changed, since the frame to build is sized off it.
-- Open: prints bigger than the bed have no tiling yet, and there is no
-  printer profile (bed, nozzle) to check against. The model height
+- Open: prints bigger than the bed have no tiling or puzzle-cut yet, and
+  there is no printer profile (bed, nozzle) to check against; the 256 mm
+  bed in the size note is fixed (`BED_MM`). The model height
   slider still stops at 4 in, which a print past about 30 in outgrows
   (the height is kept, but the slider can't show or set it).
 
-### Resort silhouette (done)
+### Resort silhouette (done, in `main` via #9 and #11)
 
+- Code: `lib/resort/frame.ts` (`resortLines`, `frameAroundResort`),
+  `lib/mesh/resort-outline.ts`, `components/useResortOutline.ts` and
+  `components/MapPicker.tsx`.
+- Tested: unit tests in `lib/resort/frame.test.ts` and
+  `lib/mesh/resort-outline.test.ts` (the shared line rule, neighbors'
+  lines left out, a chain of untagged runs kept off the frame's edge).
+  Not verified: no print or slicer check of a Resort-shape model is
+  recorded.
 - "Resort" footprint, the default after picking a resort: the model is
   cut to an outline around its runs and lifts (buffered 3% of the print,
   bays closed at 7%, detached clusters and holes dropped). Polygon runs
@@ -145,7 +189,12 @@ no visible text. Replacing both:
   runs (frame 4.59 to 4.70 km). The data has no flag for "the resort
   lists this run", only whether lines meet, so the same rule takes the
   Teardrop backcountry trail at Stowe (frame 6.05 to 7.17 km). That is
-  why it is a toggle.
+  why it is a toggle. It is `ResortSettings.followConnected`
+  (`lib/resort/settings.ts`), passed as
+  `resortLines(resort, areaId, { followConnected })` to the frame and
+  the outline alike. Unit tests cover chains, crossings, the 30 m gap,
+  neighbors' lines and `fc` in a link. The Sugarloaf and Stowe figures
+  are from real data, not a print.
 - With the name on, a 4 mm slab follows the outline with a flat tab on
   the base side carrying the name and rose; the brand goes under the tab.
 
@@ -173,15 +222,19 @@ no visible text. Replacing both:
 ### Phase R2 — inlay bodies
 
 - Done as color bodies on smooth terrain, above. Left from the original
-  list: lift terminals as small bumps.
+  list, not started: lift terminals as small bumps.
 
 ### Phase R3 — multicolor export
 
-- Bambu Studio / Orca 3MF with one object per body and filament
-  assignments in `model_settings.config`.
-- Zip of per-color STLs for other slicers.
+- Bambu Studio / Orca 3MF with filament assignments in
+  `model_settings.config`: done as one assembly with a part per
+  filament, above.
+- Zip of per-color STLs for other slicers: not started.
 
 ### Phase R4 — extras
+
+None started. The second-AMS forest color comes from elevation, not
+from forest areas in the data.
 
 - Forest areas (`landuse=forest` / `natural=wood`) as a fifth color.
 - Elevation snowline for single-extruder printers (one filament swap).
