@@ -1,21 +1,27 @@
 # Open Ski Model
 
 A web-based PWA (Next.js, deployed on Vercel) that generates 3D-printable
-topographic models of ski mountains. Type a mountain, frame a bounding
-box, get a watertight `.stl` you can hand to your slicer.
+topographic models of ski mountains. Pick a resort, set the size or the
+scale, and get a multicolor `.3mf` with the runs as their own color
+bodies, or a watertight `.stl` / `.step`.
 
 ![Hero — map picker beside the 3D viewer](docs/images/hero.png)
 
-> **Status: feature-complete.** Map picker, server-side elevation pipeline
-> (AWS terrarium + USGS 3DEP), Babylon viewer with hillshade and
-> contours, multiple footprint shapes, optional engraved plinth + compass
-> + brand mark, STL export in millimeters, share-by-URL, installable PWA.
+> **Status:** the pipeline runs end to end: resort search, elevation
+> (AWS terrarium + USGS 3DEP), a model cut to the resort's outline with
+> runs and lifts as flush color bodies, name plate and compass, 3MF / STL
+> / STEP export in millimeters, share-by-URL, installable PWA. What has
+> and hasn't been checked in a slicer or on a printer is in
+> `docs/roadmap.md`. The screenshots below predate the Resort shape and
+> the sizing panel.
 
 ## Features
 
-- **Pick any mountain on Earth.** Search via OpenStreetMap's Nominatim,
-  refine with a draggable / resizable bounding box on a MapTiler outdoor
-  basemap. No Mapbox token needed.
+- **Pick any mountain on Earth.** The search box lists ski resorts from
+  OpenSkiData and places from OpenStreetMap's Nominatim. A first visit
+  opens on Jay Peak. Plain shapes are framed with a
+  draggable / resizable box on a MapTiler outdoor basemap. No Mapbox
+  token needed.
 
   ![Map picker with draggable bbox](docs/images/map-picker.png)
 
@@ -25,12 +31,33 @@ box, get a watertight `.stl` you can hand to your slicer.
     permits.
   - **USGS 3DEP** auto-selected when the bbox is fully inside the US —
     typically 10 m, sometimes 1 m.
-- **Pick a footprint shape.** Rectangle, circle, or hexagon — the
-  non-rectangular shapes are inscribed in the bbox, with the canvas
-  aspect locked so the inscribed figure fills the frame. Circle and
-  hexagon can be rotated; drag a corner handle to spin.
+- **Pick a footprint shape.** Resort, rectangle, circle, or hexagon.
+  - *Resort* cuts the model to the outline of the ski area picked in
+    search: its runs and lifts thickened until they merge, with the bays
+    between them closed. The map shows that outline, not a box, and it
+    is the same ring the model is cut to. The frame behind it is fitted
+    to the resort's own lines, so nothing is cut off, and it isn't
+    dragged or turned by hand. Resort is on offer once a ski area has
+    been picked.
+  - *Rectangle, circle, hexagon* are plain frames to drag. The
+    non-rectangular shapes are inscribed in the bbox, with the canvas
+    aspect locked so the inscribed figure fills the frame. Rectangle and
+    hexagon turn with the rotation handle.
 
   ![Shape options: rectangle / circle / hexagon](docs/images/shapes.png)
+
+- **Size it by size or by scale.**
+  - *Set size:* type the print's size and the map scale follows. For the
+    Resort shape the size is the mountain outline's longest side; the
+    name tab is extra.
+  - *Set scale:* type or pick 1 : N ("25,000", "1:25000" and "25k" all
+    work) and the print comes out however big the covered ground is at
+    that scale. The panel reads the size back in inches and mm and says
+    when it is past a 256 mm bed. There is no bed limit, since large
+    prints are meant to be cut into tiles (not built yet). Nothing over
+    100 in is built.
+  - Changing the scale scales the model height with it, so the vertical
+    exaggeration stays the same.
 
 - **Watertight mesh, boolean-engraved.** Top surface + side walls + bottom
   face, all oriented with consistent outward normals and free of
@@ -61,7 +88,7 @@ box, get a watertight `.stl` you can hand to your slicer.
   - *Brand on bottom:* `craftedcarving.com` engraved into the bottom
     face. Independent toggle.
 
-  ![Inlaid plinth label + compass and brand on bottom](docs/images/engravings.png)
+  ![Inlaid plinth label + compass and brand on bottom](docs/images/engravings.svg)
 
 - **Adjustable mesh density.** Normal (256), High (512), or a Custom
   slider up to 1024. File size scales ~N²; the UI warns past 512.
@@ -71,8 +98,19 @@ box, get a watertight `.stl` you can hand to your slicer.
 
   ![Babylon viewer with hillshade + contours](docs/images/viewer.png)
 
+- **3MF export for multicolor printing.** One body per filament, packed
+  as a single multi-part object with its filament numbers. One AMS
+  gives four filaments: white terrain and three trail colors, with
+  lifts and text in black. A "Second AMS" option keeps every color
+  separate and adds forest green to the terrain below a treeline.
+  Runs and lifts are solid bodies 0.6 mm deep, flush with the surface.
+  The file is marked as a Bambu Studio file so Studio keeps the
+  filament numbers. Filament colors and types don't travel with it
+  yet. Not re-tested in Studio since that mark was added.
+
 - **STL export** in millimeters — pop it into Cura / PrusaSlicer / Bambu
-  Studio and it'll already be the right physical size.
+  Studio and it'll already be the right physical size. STL and STEP
+  carry one solid, the white body, so the runs show as 0.6 mm pockets.
 
   ![Exported STL loaded in a slicer](docs/images/slicer.png)
 
@@ -86,19 +124,29 @@ box, get a watertight `.stl` you can hand to your slicer.
   [OpenSkiData](https://openskidata.org) (OpenSkiMap's processed OSM
   data), rebuilt weekly by a GitHub Action into 1° cells on the `data`
   branch and served through jsDelivr, so no query server sits in the
-  request path. They're drawn on the map and set into the 3D terrain,
-  colored by difficulty. The search box lists ski resorts from the same
-  dataset; picking one turns and fits the frame to the resort's natural
-  viewport. Trail colors follow the convention the data was tagged under
-  (North America green / blue / black, Europe and Japan blue / red /
-  black) or can be set by hand. Lifts are a toggle; runs narrower than
-  the adjustable minimum width (1.2 mm) are widened so they print.
-  Multicolor inlay bodies and 3MF export are next — see
-  `docs/roadmap.md`.
+  request path. They're drawn on the map and set into the 3D terrain as
+  flush color bodies, colored by difficulty. The search box lists ski
+  resorts from the same dataset; picking one turns the frame to the
+  resort's bearing and fits it to the resort's runs and lifts. Trail
+  colors follow the convention the data was tagged under (North America
+  green / blue / black, Europe and Japan blue / red / black) or can be
+  set by hand. Lifts are a toggle; runs narrower than the adjustable
+  minimum width (1.2 mm) are widened so they print.
 
-- **Share-by-URL.** Every change to the bbox / shape / rotation / size /
-  density / engraving toggles / model height / run settings is mirrored
-  to the URL, so a deep link reopens the same model.
+- **Follow connected runs (off by default).** A resort's outline is
+  drawn around the lines tagged to it, plus untagged lines that start
+  on it. Some runs a resort skis aren't tagged to it at all and start
+  further out, like Sugarloaf's Burnt Mountain glades. With this toggle
+  on (Ski runs panel, Resort shape only), an untagged line also counts
+  if it crosses or comes within 30 m of a line already counted, and so
+  on outward. The data can't say whether the resort lists such a run,
+  only whether lines meet, so the same rule can pull in a backcountry
+  trail that ends on a run (the Teardrop at Stowe). That is why it is a
+  choice.
+
+- **Share-by-URL.** Every change to the bbox / shape / rotation / size or
+  scale / density / engraving toggles / model height / run settings is
+  mirrored to the URL, so a deep link reopens the same model.
 - **Installable PWA.** Manifest + service worker (Serwist). App shell and
   static assets cache; map tiles cached opportunistically.
 
@@ -183,6 +231,20 @@ so a 1× exaggeration is true-scale. The exaggeration comes from the
 model height setting (0.75" by default): each resort's relief is scaled
 to that height on the print, within 0.5–8×.
 
+The size in the panel and the frame on the map are a "layout": the
+ground covered and its proportions. `printFrame` (`lib/print-fit.ts`)
+turns a layout into the frame the model is built in. With a set size
+that is the layout's own size, enlarged for the Resort shape so the
+mountain, not its frame, comes out at the size typed (the outline is
+about 95% of its frame). With a set scale it is however big the
+layout's ground is at 1 : N.
+
+For the Resort shape, `resortLines` (`lib/resort/frame.ts`) is the one
+rule for which runs and lifts are the ski area's. The frame is fitted
+around those lines and the outline is traced around the same lines
+(`lib/mesh/resort-outline.ts`), by the same code for the map and the
+model, so the outline always sits inside its frame.
+
 For STL export we clone the mesh, scale by 25.4 (mm/in), and let the
 serializer bake the transform into vertex positions. The downloaded file
 opens at life-size in any slicer that defaults to millimeters.
@@ -197,7 +259,7 @@ are fused in by position dedup so the export stays a single solid.
 ## URL state
 
 ```
-/?b=W,S,E,N&sh=shape&r=rot&s=WxH&lk=1&g=grid&el=1&eb=0&t=baseInches&v=exag&label=Name&place=Town
+/?b=W,S,E,N&sh=shape&ol=1&ra=areaId&r=rot&s=WxH&sc=N&lk=1&g=grid&el=1&eb=0&fc=1&t=baseInches&rh=heightInches&label=Name&place=Town
 ```
 
 | Key     | Meaning                                                |
@@ -226,10 +288,12 @@ are fused in by position dedup so the export stays a single solid.
 Example:
 
 ```
-/?b=-72.50000,44.92000,-72.46000,44.94000&s=6x6&t=0.25&v=2&label=Jay%20Peak
+/?b=-72.50000,44.92000,-72.46000,44.94000&s=6x6&t=0.25&rh=0.75&label=Jay%20Peak
 ```
 
-The page reads this on mount and rebuilds the picker / model spec.
+The page reads this on mount and rebuilds the picker / model spec. With
+no `b` it opens on Jay Peak. A link on the Resort shape (`ol=1` with
+`ra`) has its frame fitted again from the resort's lines on load.
 
 ## Project layout
 
@@ -243,17 +307,20 @@ app/
   page.tsx                 Map ↔ viewer state machine
   sw.ts                    Service worker entry (built by Serwist)
 components/
-  MapPicker.tsx            MapLibre + draggable bbox
-  ModelViewer.tsx          Babylon scene + toolbar (sun, contours, STL)
-  SearchBar.tsx            Nominatim geocoding
-  ShapeControls.tsx        Rectangle / circle / hexagon selector
-  SizeControls.tsx         Print-size + model-height inputs
+  MapPicker.tsx            MapLibre + draggable bbox, runs, resort outline
+  ModelViewer.tsx          Babylon scene + toolbar (sun, contours, exports)
+  SearchBar.tsx            Ski-area search + Nominatim geocoding
+  ShapeControls.tsx        Resort / rectangle / circle / hexagon selector
+  SizeControls.tsx         Set size or set scale, base, model height
   DensityControls.tsx      Mesh-density preset + custom slider
-  EngravingControls.tsx    Label/compass + brand toggles
-  ResortControls.tsx       Runs / lifts / min width / color scheme
+  EngravingControls.tsx    Label/compass + brand toggles, second line
+  ResortControls.tsx       Runs / lifts / connected runs / min width / colors
+  useResortOutline.ts      Traces the resort outline for the map
   RegisterSW.tsx           Service-worker registration
 lib/
+  angle.ts                 Degree normalizing
   bbox.ts                  Bbox math (small-angle approx)
+  print-fit.ts             Print size vs scale, model height, drag fitting
   shape.ts                 Shape geometry + point-in-shape tests
   elevation/
     terrarium.ts           Tile math + PNG decoding (server)
@@ -262,6 +329,8 @@ lib/
   resort/
     skidata.ts             Data-branch cell reader + ski-area search (server)
     request.ts             /api/resort request validation
+    frame.ts               Which lines are a ski area's, and the frame around them
+    front.ts               Which side a resort's base is on
     place.ts               Town + state for the name plate's second line
     colors.ts              Difficulty → color per scheme
     geojson.ts             Resort data → GeoJSON for the map
@@ -280,13 +349,12 @@ lib/mesh/
     silhouette.ts          Resort outline, slab and name tab
     resort-outline.ts      Traces the outline for both the map and the model
     inlays.ts              Runs + lifts as flush color bodies, one per filament
+    multicolor.ts          Built solids to one body per filament
+    three-mf.ts            3MF writer (one part per filament)
     text.ts                Font loading, glyph outlines, text solids
     watertight.ts          Build closed VertexData from height grid
     runs.ts                Runs + lifts on the model plane, grouped by color
     contours.ts            Marching squares contour lines
-    plinth.ts              Beveled plinth around the model
-    compass.ts             North-arrow indicator geometry
-    text.ts                Glyph extrusion for engraved text
     step-export.ts         AP203 STEP (B-rep solid) serializer
   types.ts                 Shared geometry types
   url-state.ts             Encode/decode model spec to search params
@@ -295,6 +363,7 @@ public/
   icon.svg
   fonts/
 docs/
+  roadmap.md               What is done, what is checked, what is open
   images/                  Screenshots / placeholder art for this README
 ```
 
