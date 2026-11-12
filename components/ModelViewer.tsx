@@ -32,18 +32,25 @@ import {
   buildWatertight,
   buildShapedWatertight,
   DEFAULT_PALETTE,
+  lowestKeptElevation,
 } from "@/lib/mesh/watertight";
 import { buildContourLines } from "@/lib/mesh/contours";
-import { buildModelSolids, unionForExport, type BuiltModel, type ModelSpec } from "@/lib/mesh/engrave";
+import {
+  buildModelSolids,
+  terrainBaseInches,
+  terrainLiftInches,
+  unionForExport,
+  type BuiltModel,
+  type ModelSpec,
+} from "@/lib/mesh/engrave";
 import type { InlaySpec } from "@/lib/mesh/inlays";
 import { loadManifold, vertexDataFromManifold, type ColorAt, type TriMesh } from "@/lib/mesh/manifold";
 import { buildColorBodies, treelineFor } from "@/lib/mesh/multicolor";
 import { buildThreeMf } from "@/lib/mesh/three-mf";
 import { plateFacingDeg } from "@/lib/mesh/nameplate";
 import { traceResortOutline } from "@/lib/mesh/resort-outline";
-import { OUTLINE_PLINTH_HEIGHT_IN, outlineMask } from "@/lib/mesh/silhouette";
+import { outlineMask } from "@/lib/mesh/silhouette";
 import type { Contour } from "@/lib/mesh/text";
-import { plinthHeightInches } from "@/lib/mesh/plinth";
 import { resortFrontBearing, resortInlayGroups } from "@/lib/mesh/runs";
 import { exportToStep } from "@/lib/mesh/step-export";
 import { loadFont } from "@/lib/mesh/text";
@@ -67,7 +74,10 @@ interface Props {
   /** Degrees clockwise from north. */
   rotation: number;
   data: ElevationResponse;
+  /** Thickness under the lowest ground when the terrain is its own base. */
   baseThicknessInches: number;
+  /** Height of the lowest ground above the plinth's top, when there is a plinth. */
+  plinthLiftInches: number;
   verticalExaggeration: number;
   engraveLabel: boolean;
   engraveBrand: boolean;
@@ -116,7 +126,7 @@ function frameCameraOn(camera: ArcRotateCamera, built: BuiltModel, facingDeg: nu
   const boxes = built.plinth ? [terrain, built.plinth.boundingBox()] : [terrain];
   const minAt = (i: number) => Math.min(...boxes.map((b) => b.min[i]));
   const maxAt = (i: number) =>
-    i === 1 ? terrain.max[1] + built.plinthHeight : Math.max(...boxes.map((b) => b.max[i]));
+    i === 1 ? terrain.max[1] + built.terrainLift : Math.max(...boxes.map((b) => b.max[i]));
   const center = [0, 1, 2].map((i) => (minAt(i) + maxAt(i)) / 2);
   const halfDiagonal = Math.hypot(...[0, 1, 2].map((i) => (maxAt(i) - minAt(i)) / 2));
 
@@ -167,6 +177,7 @@ export default function ModelViewer({
   heightInches,
   rotation,
   baseThicknessInches,
+  plinthLiftInches,
   verticalExaggeration,
   engraveLabel,
   engraveBrand,
@@ -247,13 +258,28 @@ export default function ModelViewer({
     return outline ? Math.round(front) : plateFacingDeg({ ...side, facing: front });
   }, [bbox, data, shape, widthInches, heightInches, rotation, resort, engraveLabel, engraveBrand, outline]);
 
-  const plinthTopY = !engraveLabel ? 0 : outline ? OUTLINE_PLINTH_HEIGHT_IN : plinthHeightInches();
+  const terrainLift = terrainLiftInches(engraveLabel, outline !== null);
+  const terrainBase = terrainBaseInches({ plinth: engraveLabel, plinthLiftInches, baseThicknessInches });
 
   const insideOutline = useMemo(() => {
     if (!outline) return undefined;
     const [halfW, halfH] = shapeAABBHalf(shape, widthInches, heightInches, rotation);
     return outlineMask(outline, halfW * 2, halfH * 2, data.width, data.height);
   }, [outline, shape, widthInches, heightInches, rotation, data.width, data.height]);
+
+  // The lowest ground the finished model shows sits at the base, so no
+  // wall is left under it for valleys the cut removes.
+  const floorElevation = useMemo(() => {
+    if (!insideOutline && shape === "rectangle" && rotation === 0) return data.min;
+    const [halfW, halfH] = shapeAABBHalf(shape, widthInches, heightInches, rotation);
+    return lowestKeptElevation(
+      data,
+      halfW * 2,
+      halfH * 2,
+      (x, z) =>
+        pointInShape(shape, x, z, widthInches, heightInches, rotation) && (insideOutline?.(x, z) ?? true),
+    );
+  }, [data, shape, widthInches, heightInches, rotation, insideOutline]);
 
   // The runs and lifts are set into the terrain as color bodies, the same
   // ones the 3MF carries. Not while an outline is still being traced: the
@@ -374,8 +400,8 @@ export default function ModelViewer({
 
   // --- 2. Rebuild terrain + (optional) plinth + engravings ---
   // The terrain VertexData is the same as before; the plinth is a
-  // separate mesh that sits beneath the terrain (terrain shifts up by
-  // plinthHeight). CSG operations engrave the label/compass into the
+  // separate mesh that the terrain is seated in (terrain shifts up by
+  // terrainLift). CSG operations engrave the label/compass into the
   // plinth bevel and "craftedcarving.com" into the bottom face.
   useEffect(() => {
     const scene = sceneRef.current;
@@ -399,8 +425,9 @@ export default function ModelViewer({
       data,
       widthInches,
       heightInches,
-      baseThicknessInches,
+      baseThicknessInches: terrainBase,
       verticalExaggeration,
+      floorElevation,
     };
     // Use the shape-aware path for anything that needs masking: a
     // non-rectangle shape, OR a rotated rectangle (since the grid then
@@ -418,9 +445,9 @@ export default function ModelViewer({
     terrain.edgesColor = new Color4(0.08, 0.09, 0.12, 1);
     terrainRef.current = terrain;
 
-    // With a plinth the terrain sits on top of it, so everything drawn in
-    // terrain coordinates shifts up by the plinth height.
-    terrain.position.y = plinthTopY;
+    // With a plinth the terrain is seated in it, so everything drawn in
+    // terrain coordinates shifts up by the lift.
+    terrain.position.y = terrainLift;
     terrain.computeWorldMatrix(true);
 
     // Rebuild contour lines (replace any previous mesh). For non-rect
@@ -454,7 +481,8 @@ export default function ModelViewer({
       data,
       widthInches: Wgrid,
       heightInches: Hgrid,
-      baseThicknessInches,
+      baseThicknessInches: terrainBase,
+      floorElevation,
       inPerMeter,
       verticalExaggeration,
       count: CONTOUR_COUNT,
@@ -481,7 +509,7 @@ export default function ModelViewer({
       // Slightly lifted dark line — readable on the mid-gray terrain.
       lineMesh.color = new Color3(0.18, 0.21, 0.26);
       lineMesh.isPickable = false;
-      lineMesh.position.y = plinthTopY;
+      lineMesh.position.y = terrainLift;
       lineMesh.setEnabled(showContours);
       contoursRef.current = lineMesh;
     }
@@ -526,10 +554,10 @@ export default function ModelViewer({
               "terrain",
               built.terrain,
               terrainMat,
-              terrainColorAt(baseThicknessInches, topY),
+              terrainColorAt(terrainBase, topY),
               !outline,
             );
-            branded.position.y = plinthTopY;
+            branded.position.y = terrainLift;
             terrain.dispose();
             terrainRef.current = branded;
           }
@@ -542,7 +570,7 @@ export default function ModelViewer({
           for (const { key, solid } of built.colorInlays) {
             const rgb = inlayColors.get(key) ?? LIFT_COLOR.rgb;
             const body = meshFromSolid(scene, `color-${key}`, solid, terrainMat, () => rgb, false);
-            body.position.y = plinthTopY;
+            body.position.y = terrainLift;
             fills.push(body);
           }
           inlaysRef.current = fills;
@@ -563,7 +591,7 @@ export default function ModelViewer({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bbox, shape, rotation, data, widthInches, heightInches, baseThicknessInches, verticalExaggeration, engraveLabel, engraveBrand, label, place, plateFacing, outline, insideOutline, plinthTopY, inlays, inlayColors]);
+  }, [bbox, shape, rotation, data, widthInches, heightInches, terrainBase, floorElevation, verticalExaggeration, engraveLabel, engraveBrand, label, place, plateFacing, outline, insideOutline, terrainLift, inlays, inlayColors]);
 
   // --- 3. Toggle contour visibility without rebuilding ---
   useEffect(() => {
@@ -661,7 +689,7 @@ export default function ModelViewer({
       const { spec, mesh } = inputs;
       const built = buildModelSolids(m, font, mesh, spec);
       try {
-        const treeline = treelineFor(baseThicknessInches, built.terrain.boundingBox().max[1]);
+        const treeline = treelineFor(terrainBase, built.terrain.boundingBox().max[1]);
         const { parts, filaments } = buildColorBodies(m, built, treeline, secondAms);
         const title = label || "Ski model";
         const blob = await buildThreeMf(title, parts, filaments);
@@ -670,7 +698,7 @@ export default function ModelViewer({
         freeBuilt(built);
       }
     })().catch((err: unknown) => console.error("[3mf] export failed", err));
-  }, [label, secondAms, baseThicknessInches]);
+  }, [label, secondAms, terrainBase]);
 
   return (
     <div className="relative w-full h-full">

@@ -22,6 +22,8 @@ export interface UrlState {
   widthInches: number;
   heightInches: number;
   baseThicknessInches: number;
+  /** Height of the lowest ground above the name plate's plinth. */
+  plinthLiftInches: number;
   reliefInches: number;
   aspectLocked: boolean;
   /** The N of 1 : N when the scale is set and the print size follows; null when the size is set. */
@@ -63,6 +65,7 @@ export function encodeUrlState(s: UrlState): URLSearchParams {
   }
   if (s.colorScheme !== "auto") params.set("cs", s.colorScheme);
   params.set("t", trim(s.baseThicknessInches));
+  if (s.plinthLiftInches !== 0) params.set("pl", trim(s.plinthLiftInches));
   params.set("rh", trim(s.reliefInches));
   if (s.label) params.set("label", s.label);
   if (s.place) params.set("place", s.place);
@@ -114,6 +117,8 @@ export function decodeUrlState(params: URLSearchParams): Partial<UrlState> {
   if (cs && isColorSchemeSetting(cs)) out.colorScheme = cs;
   const t = params.get("t");
   if (t && Number.isFinite(Number(t))) out.baseThicknessInches = Number(t);
+  const pl = params.get("pl");
+  if (pl && Number.isFinite(Number(pl)) && Number(pl) >= 0) out.plinthLiftInches = Number(pl);
   const rh = params.get("rh");
   if (rh && Number.isFinite(Number(rh)) && Number(rh) > 0) out.reliefInches = Number(rh);
   const label = params.get("label");

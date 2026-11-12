@@ -230,6 +230,7 @@ export default function Home() {
     widthInches: 6,
     heightInches: 6,
     baseThicknessInches: 0.25,
+    plinthLiftInches: 0,
     reliefInches: DEFAULT_RELIEF_INCHES,
     aspectLocked: true,
   });
@@ -297,6 +298,7 @@ export default function Home() {
       widthInches: w,
       heightInches: h,
       baseThicknessInches: parsed.baseThicknessInches ?? 0.25,
+      plinthLiftInches: parsed.plinthLiftInches ?? 0,
       reliefInches: parsed.reliefInches ?? DEFAULT_RELIEF_INCHES,
       aspectLocked: locked,
     });
@@ -348,6 +350,7 @@ export default function Home() {
         widthInches: size.widthInches,
         heightInches: size.heightInches,
         baseThicknessInches: size.baseThicknessInches,
+        plinthLiftInches: size.plinthLiftInches,
         reliefInches: size.reliefInches,
         aspectLocked: size.aspectLocked,
         scaleDenominator: sizing.mode === "scale" ? sizing.denominator : null,
@@ -966,6 +969,7 @@ export default function Home() {
           size={size}
           shape={shape}
           resortMode={silhouette}
+          onPlinth={engraveLabel}
           rotation={rotation}
           onChange={handleSizeChange}
           sizing={sizing}
@@ -1106,6 +1110,7 @@ export default function Home() {
             widthInches={snapshot.widthInches}
             heightInches={snapshot.heightInches}
             baseThicknessInches={size.baseThicknessInches}
+            plinthLiftInches={size.plinthLiftInches}
             verticalExaggeration={exaggeration ?? 1}
             engraveLabel={engraveLabel}
             engraveBrand={engraveBrand}

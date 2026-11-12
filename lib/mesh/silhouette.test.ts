@@ -8,8 +8,9 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { ElevationResponse } from "@/lib/elevation/types";
 import type { Bbox } from "@/lib/types";
 
-import { buildModelSolids, unionForExport } from "./engrave";
+import { buildModelSolids, terrainBaseInches, unionForExport } from "./engrave";
 import { withSolids } from "./manifold";
+import { TERRAIN_SEAT_IN } from "./plinth";
 import {
   buildOutlinePlinth,
   buildResortOutline,
@@ -17,7 +18,7 @@ import {
   outlineMask,
 } from "./silhouette";
 import type { Contour } from "./text";
-import { buildWatertight } from "./watertight";
+import { buildWatertight, lowestKeptElevation } from "./watertight";
 
 type Toplevel = Awaited<ReturnType<typeof Module>>;
 let m: Toplevel;
@@ -219,10 +220,47 @@ describe("buildModelSolids with an outline", () => {
       expect(box.max[0]).toBeCloseTo(2, 3);
       expect(box.min[2]).toBeCloseTo(-1.5, 3);
       expect(box.max[2]).toBeCloseTo(2, 3);
-      expect(built.plinthHeight).toBeCloseTo(OUTLINE_PLINTH_HEIGHT_IN, 6);
+      expect(built.terrainLift).toBeCloseTo(OUTLINE_PLINTH_HEIGHT_IN - TERRAIN_SEAT_IN, 6);
       expect(union.status()).toBe("NoError");
       expect(union.decompose().map((s) => { const v = s.volume(); s.delete(); return v; })).toHaveLength(1);
       expect(built.inlays.length).toBe("JayPeak".length + 1);
+    });
+  });
+
+  it("starts the cut mountain at the plinth's top, whatever lies lower outside the ring", () => {
+    // The ring keeps the hill's middle; the frame's corners are far lower.
+    const inside = outlineMask(outline, base.widthInches, base.heightInches, size, size);
+    const floorElevation = lowestKeptElevation(data, base.widthInches, base.heightInches, inside);
+    expect(floorElevation).toBeGreaterThan(data.min + 20);
+    const { vertexData, inPerMeter } = buildWatertight({
+      ...base,
+      bbox,
+      data,
+      baseThicknessInches: terrainBaseInches({ plinth: true, plinthLiftInches: 0, baseThicknessInches: 0.25 }),
+      verticalExaggeration: 2,
+      floorElevation,
+    });
+    const built = buildModelSolids(
+      m,
+      font,
+      { positions: vertexData.positions!, indices: vertexData.indices! },
+      { shape: "rectangle", ...base, label: "Jay Peak", plinth: true, brand: true, outline },
+    );
+    const union = unionForExport(m, built);
+    withSolids([built.terrain, built.plinth!, ...built.inlays, union], () => {
+      const mesh = built.terrain.getMesh();
+      let lowestSurface = Infinity;
+      for (let v = 0; v < mesh.numVert; v++) {
+        const y = mesh.vertProperties[v * mesh.numProp + 1];
+        if (y > 1e-6) lowestSurface = Math.min(lowestSurface, y);
+      }
+      // No ground below the plinth's top, and no more wall above it than one grid cell can rise.
+      const aboveTop = lowestSurface + built.terrainLift - OUTLINE_PLINTH_HEIGHT_IN;
+      const steepestCellRise = 60 * inPerMeter * 2;
+      expect(aboveTop).toBeGreaterThan(-1e-6);
+      expect(aboveTop).toBeLessThan(steepestCellRise);
+      expect(union.status()).toBe("NoError");
+      expect(union.decompose().map((s) => { const v = s.volume(); s.delete(); return v; })).toHaveLength(1);
     });
   });
 

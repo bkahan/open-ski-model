@@ -17,8 +17,14 @@ import {
   type NameplateLayout,
   type PlateSide,
 } from "./nameplate";
-import { buildPlinthSolid, plinthHeightInches } from "./plinth";
-import { buildOutlinePlinth, OUTLINE_PLINTH_HEIGHT_IN, outlinePrism } from "./silhouette";
+import {
+  buildPlinthSolid,
+  plinthHeightInches,
+  SEAT_RECESS_DEPTH_IN,
+  SEAT_RECESS_INSET_IN,
+  TERRAIN_SEAT_IN,
+} from "./plinth";
+import { buildOutlinePlinth, OUTLINE_PLINTH_HEIGHT_IN, outlinePrism, prismFromSection } from "./silhouette";
 import { buildTextSolid, fontSizeForCapHeight, measureTextWidth, type Contour } from "./text";
 
 const MM_PER_INCH = 25.4;
@@ -27,12 +33,46 @@ const BRAND_CAP_IN = 3 / MM_PER_INCH;
 const BRAND_OVERCUT_IN = 0.01;
 /** Taller than any terrain, so the outline cuts all the way through. */
 const OUTLINE_CUTTER_HEIGHT_IN = 100;
+/** How far the seat's cutter stands above the plinth's top; any height clears it. */
+const SEAT_CUTTER_RISE_IN = 1;
+
+/** Height of the plinth's top face: the slab's under an outline, the chamfer's otherwise. */
+function plinthTopInches(plinth: boolean, outline: boolean): number {
+  if (!plinth) return 0;
+  return outline ? OUTLINE_PLINTH_HEIGHT_IN : plinthHeightInches();
+}
+
+/** How far the terrain is raised off y = 0: onto the plinth, less its seat. */
+export function terrainLiftInches(plinth: boolean, outline: boolean): number {
+  return plinth ? plinthTopInches(plinth, outline) - TERRAIN_SEAT_IN : 0;
+}
+
+export interface TerrainBase {
+  /** Whether a plinth carries the terrain. */
+  plinth: boolean;
+  /** Height of the terrain's lowest point above the plinth's top. */
+  plinthLiftInches: number;
+  /** Thickness under the lowest point when the terrain is its own base. */
+  baseThicknessInches: number;
+}
+
+/**
+ * Thickness to build under the terrain's lowest point. On a plinth that is
+ * the seat plus the lift, so the lowest ground lands `plinthLiftInches`
+ * above the plinth's top.
+ */
+export function terrainBaseInches(base: TerrainBase): number {
+  return base.plinth ? TERRAIN_SEAT_IN + Math.max(0, base.plinthLiftInches) : base.baseThicknessInches;
+}
 
 export interface ModelSpec extends PlateSide {
   label: string;
   /** Second line of the name plate, such as "Jay, VT". */
   place?: string;
-  /** Plinth with name plate and compass. */
+  /**
+   * Plinth with name plate and compass. The terrain mesh must then be
+   * built on `terrainBaseInches`: its bottom TERRAIN_SEAT_IN goes into the plinth.
+   */
   plinth: boolean;
   /** Brand text on the underside. */
   brand: boolean;
@@ -45,13 +85,14 @@ export interface ModelSpec extends PlateSide {
 export interface BuiltModel {
   /** Terrain, with the brand cut in when there is no plinth. Model space, base at y = 0. */
   terrain: Manifold;
-  /** Plinth with pockets, or null. The terrain sits on top at `plinthHeight`. */
+  /** Plinth with pockets and the recess under the terrain cut in, or null. */
   plinth: Manifold | null;
   /** Name-plate fill bodies (one per glyph + the rose), for multicolor printing. */
   inlays: Manifold[];
   /** Run and lift bodies by color, when asked for. Same space as `terrain`. */
   colorInlays: ColorInlay[];
-  plinthHeight: number;
+  /** How far the terrain and its color bodies are raised to sit in the plinth. */
+  terrainLift: number;
   nameplate: NameplateLayout | null;
 }
 
@@ -83,11 +124,7 @@ export function buildModelSolids(
     let inlays: Manifold[] = [];
     let nameplate: NameplateLayout | null = null;
     const outline = spec.outline ?? null;
-    const plinthHeight = !spec.plinth
-      ? 0
-      : outline
-        ? OUTLINE_PLINTH_HEIGHT_IN
-        : plinthHeightInches();
+    const terrainLift = terrainLiftInches(spec.plinth, outline !== null);
 
     if (outline) {
       const cutter = own(outlinePrism(m, outline, OUTLINE_CUTTER_HEIGHT_IN));
@@ -96,6 +133,7 @@ export function buildModelSolids(
       release(terrain);
       terrain = cut;
     }
+    const recess = spec.plinth ? own(seatRecess(terrain, terrainLift)) : null;
 
     let colorInlays: ColorInlay[] = [];
     if (spec.inlays) {
@@ -131,6 +169,12 @@ export function buildModelSolids(
         raw = own(buildPlinthSolid(m, spec));
         plate = buildNameplateSolids(m, font, { ...spec, compass: true });
       }
+      if (recess) {
+        const recessed = own(m.Manifold.difference(raw, recess));
+        release(raw);
+        release(recess);
+        raw = recessed;
+      }
       for (const s of plate.solids) own(s);
       nameplate = plate.layout;
       if (plate.solids.length > 0) {
@@ -157,10 +201,28 @@ export function buildModelSolids(
       }
     }
 
-    return { terrain, plinth, inlays, colorInlays, plinthHeight, nameplate };
+    return { terrain, plinth, inlays, colorInlays, terrainLift, nameplate };
   } catch (err) {
     for (const s of owned) s.delete();
     throw err;
+  }
+}
+
+/**
+ * The part of the plinth to clear from under the terrain: the terrain's
+ * own footprint drawn in a little, from just under the plinth's top up.
+ */
+function seatRecess(terrain: Manifold, terrainLift: number): Manifold {
+  // Below the seat's top the terrain is all wall, so a slice there is its footprint.
+  const stood = terrain.rotate([90, 0, 0]);
+  const slice = stood.slice(TERRAIN_SEAT_IN / 2);
+  const footprint = slice.scale([1, -1]);
+  const inset = footprint.offset(-SEAT_RECESS_INSET_IN, "Miter", 4);
+  const prism = prismFromSection(inset, SEAT_RECESS_DEPTH_IN + SEAT_CUTTER_RISE_IN);
+  try {
+    return prism.translate([0, terrainLift + TERRAIN_SEAT_IN - SEAT_RECESS_DEPTH_IN, 0]);
+  } finally {
+    for (const s of [stood, slice, footprint, inset, prism]) s.delete();
   }
 }
 
@@ -200,10 +262,10 @@ export function cutBrand(
   });
 }
 
-/** One solid for STL/STEP: terrain lifted onto the plinth, unioned. */
+/** One solid for STL/STEP: terrain lifted into its seat in the plinth, unioned. */
 export function unionForExport(m: ManifoldToplevel, built: BuiltModel): Manifold {
   if (!built.plinth) return built.terrain.translate([0, 0, 0]);
-  const lifted = built.terrain.translate([0, built.plinthHeight, 0]);
+  const lifted = built.terrain.translate([0, built.terrainLift, 0]);
   const out = m.Manifold.union(lifted, built.plinth);
   lifted.delete();
   return out;

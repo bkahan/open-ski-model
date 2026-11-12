@@ -46,7 +46,10 @@ export interface SizeState {
   widthInches: number;
   /** Shape's pre-rotation height in inches. */
   heightInches: number;
+  /** Thickness under the lowest ground when there is no name plate. */
   baseThicknessInches: number;
+  /** Height of the lowest ground above the name plate's plinth. */
+  plinthLiftInches: number;
   /** Base-to-peak height of the terrain on the print, in inches. */
   reliefInches: number;
   /** When true, the rectangle's height is forced equal to its width. */
@@ -58,6 +61,8 @@ interface Props {
   shape: Shape;
   /** The footprint is a resort's outline in a square frame fitted to it. */
   resortMode: boolean;
+  /** The terrain sits on the name plate's plinth, not on a base of its own. */
+  onPlinth: boolean;
   rotation: number;
   onChange: (next: SizeState) => void;
   sizing: Sizing;
@@ -78,6 +83,7 @@ export default function SizeControls({
   size,
   shape,
   resortMode,
+  onPlinth,
   rotation,
   onChange,
   sizing,
@@ -244,14 +250,25 @@ export default function SizeControls({
           </p>
         )}
 
-        <LabeledNumber
-          label="Base thickness (in)"
-          value={size.baseThicknessInches}
-          min={0}
-          max={2}
-          step={0.05}
-          onChange={(v) => onChange({ ...size, baseThicknessInches: v })}
-        />
+        {onPlinth ? (
+          <LabeledNumber
+            label="Height above name plate (in)"
+            value={size.plinthLiftInches}
+            min={0}
+            max={2}
+            step={0.05}
+            onChange={(v) => onChange({ ...size, plinthLiftInches: v })}
+          />
+        ) : (
+          <LabeledNumber
+            label="Base thickness (in)"
+            value={size.baseThicknessInches}
+            min={0}
+            max={2}
+            step={0.05}
+            onChange={(v) => onChange({ ...size, baseThicknessInches: v })}
+          />
+        )}
       </fieldset>
 
       <fieldset className="space-y-2">
