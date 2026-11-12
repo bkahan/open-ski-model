@@ -3,6 +3,21 @@
 // live in Metadata/model_settings.config, which Bambu Studio and Orca
 // read; basematerials carries the same colors for everything else.
 //
+// Bambu Studio sorts a 3MF by its Application metadata: a value starting
+// "BambuStudio-" makes it a Bambu file (bbs_3mf.cpp, _handle_end_metadata),
+// anything else a third-party one. A third-party file is loaded as
+// geometry, and where Studio can read colors from it, it drops the file's
+// own filament numbers in favor of its color import (Plater.cpp,
+// load_files). A Bambu file keeps the numbers in model_settings.config.
+// So the file carries that mark.
+//
+// There is no project_settings.config on purpose. In a marked file Studio
+// would load it as the project's settings, over bare defaults for every
+// key the file lacks, in place of the user's presets. Without one it
+// loads geometry and filament numbers and leaves the presets alone. The
+// cost: opened as a project, Studio does not add filaments to its list,
+// so the user needs as many there as the model has colors.
+//
 // A 3MF is a zip, so a small writer lives here rather than a dependency.
 
 const MM_PER_INCH = 25.4;
@@ -49,6 +64,14 @@ function meshXml(part: ThreeMfPart, chunks: string[]): void {
   chunks.push("</triangles></mesh>");
 }
 
+/**
+ * The Bambu Studio release the file claims to come from. Old enough that
+ * no current install calls it newer than itself and asks for an update.
+ */
+const BAMBU_APPLICATION = "BambuStudio-01.10.02.76";
+/** Bambu's own 3MF layout version: parts as component objects, settings in model_settings.config. */
+const BAMBU_3MF_VERSION = "1";
+
 const MATERIALS_ID = 1;
 const firstPartId = MATERIALS_ID + 1;
 
@@ -56,7 +79,9 @@ function modelXml(title: string, parts: ThreeMfPart[], filaments: ThreeMfFilamen
   const assemblyId = firstPartId + parts.length;
   const chunks: string[] = [
     '<?xml version="1.0" encoding="UTF-8"?>',
-    '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">',
+    '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:BambuStudio="http://schemas.bambulab.com/package/2021">',
+    `<metadata name="Application">${BAMBU_APPLICATION}</metadata>`,
+    `<metadata name="BambuStudio:3mfVersion">${BAMBU_3MF_VERSION}</metadata>`,
     `<metadata name="Title">${escapeXml(title)}</metadata>`,
     "<resources>",
     `<basematerials id="${MATERIALS_ID}">`,
@@ -97,13 +122,6 @@ function modelSettingsXml(title: string, parts: ThreeMfPart[]): string {
   });
   lines.push("  </object>", "</config>");
   return lines.join("\n");
-}
-
-function projectSettingsJson(filaments: ThreeMfFilament[]): string {
-  return JSON.stringify({
-    filament_colour: filaments.map((f) => f.hex),
-    filament_type: filaments.map(() => "PLA"),
-  });
 }
 
 const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8"?>
@@ -205,6 +223,5 @@ export function buildThreeMf(
     ["_rels/.rels", ROOT_RELS],
     ["3D/3dmodel.model", modelXml(title, parts, filaments)],
     ["Metadata/model_settings.config", modelSettingsXml(title, parts)],
-    ["Metadata/project_settings.config", projectSettingsJson(filaments)],
   ]);
 }
