@@ -258,7 +258,7 @@ export default function Home() {
   const resortAbortRef = useRef<AbortController | null>(null);
   const didHydrateFromUrl = useRef(false);
   /** What the first render has to pick once handlers exist: the default resort, or a link's. */
-  const startRef = useRef<{ pick: ResortPick; followConnected: boolean } | "default" | null>(null);
+  const startRef = useRef<{ pick: ResortPick | "default"; followConnected: boolean } | null>(null);
   // Latest value for loadResort, which is created once.
   const silhouetteRef = useRef(silhouette);
   useEffect(() => {
@@ -325,10 +325,13 @@ export default function Home() {
     // A first visit has no frame to restore and opens on the default
     // resort. A Resort link's frame is not trusted either: it may have
     // been dragged or sized before frames were fitted, so it is refitted.
+    // The setting rides along: the handlers the start effect calls are the
+    // first render's, from before any of this state is in.
+    const followConnected = parsed.followConnected ?? DEFAULT_RESORT_SETTINGS.followConnected;
     startRef.current = !parsed.bbox
-      ? "default"
+      ? { pick: "default", followConnected }
       : resortShape
-        ? { pick: linkPick, followConnected: parsed.followConnected ?? DEFAULT_RESORT_SETTINGS.followConnected }
+        ? { pick: linkPick, followConnected }
         : null;
   }, []);
 
@@ -548,11 +551,30 @@ export default function Home() {
     setResortFitting(true);
     setError(null);
 
-    lines
-      .then((data) => {
+    const frameFor = (data: ResortData): { center: LngLat; bbox: Bbox } | null => {
+      const frame = frameAroundResort(data, pick.id, pick.rotation, OUTLINE_FRAME_PADDING, { followConnected });
+      if (!frame) return null;
+      return {
+        center: frame.center,
+        bbox: bboxForShape(frame.center, "rectangle", side, side, pick.rotation, frame.sideMeters / side),
+      };
+    };
+    const fitted = async () => {
+      const first = await lines;
+      const frame = frameFor(first);
+      if (!frame || bboxContains(first.bbox, frame.bbox)) return { data: first, frame };
+      // Lines fetched around the index's viewport stopped short of the
+      // frame they led to. The lines that cover it are the ones the
+      // outline is traced from, and they may reach further, so the frame
+      // is fitted to those.
+      const wider = await fetchResort(resortFetchArea(frame.bbox));
+      return { data: wider, frame: frameFor(wider) ?? frame };
+    };
+
+    fitted()
+      .then(({ data, frame }) => {
         if (resortFitRef.current !== fit) return;
         setResortFitting(false);
-        const frame = frameAroundResort(data, pick.id, pick.rotation, OUTLINE_FRAME_PADDING, followConnected);
         if (!frame) {
           // Nothing carries this ski area's tag, so there is nothing to outline.
           setSilhouette(false);
@@ -561,11 +583,10 @@ export default function Home() {
           setError("No runs are mapped for this resort, so it is shown as a plain frame.");
           return;
         }
-        const fitted = bboxForShape(frame.center, "rectangle", side, side, pick.rotation, frame.sideMeters / side);
-        setBbox(fitted);
+        setBbox(frame.bbox);
         setFlyTo(frame.center);
-        // The same lines draw the outline: skip a second request when they cover the frame.
-        if (bboxContains(data.bbox, fitted)) setResort(data);
+        // The same lines draw the outline: skip another request when they cover the frame.
+        if (bboxContains(data.bbox, frame.bbox)) setResort(data);
       })
       .catch((err: unknown) => {
         console.error("[resort-frame]", err);
@@ -590,7 +611,7 @@ export default function Home() {
     if (parts?.town) setPlace(placeLine(parts));
   };
 
-  const handleSearch = (result: SearchResult) => {
+  const handleSearch = (result: SearchResult, followConnected = resortSettings.followConnected) => {
     setLabel(result.name);
     // The index's own idea of the place shows at once. Its towns are often
     // a hamlet or the next town over, so fillPlace replaces it.
@@ -609,7 +630,7 @@ export default function Home() {
           rotation: result.bearing !== undefined ? rotationForBearing(result.bearing) : rotation,
         },
         lines,
-        resortSettings.followConnected,
+        followConnected,
       );
       fillPlace(result, lines).catch((err: unknown) => {
         if (placeLookupRef.current === result.id) placeLookupRef.current = null;
@@ -641,10 +662,9 @@ export default function Home() {
   useEffect(() => {
     const start = startRef.current;
     startRef.current = null;
-    if (start === "default") startHandlersRef.current.handleSearch(DEFAULT_RESORT);
-    else if (start) {
-      startHandlersRef.current.frameResort(start.pick, fetchResort(resortFetchArea(start.pick.bbox)), start.followConnected);
-    }
+    if (!start) return;
+    if (start.pick === "default") startHandlersRef.current.handleSearch(DEFAULT_RESORT, start.followConnected);
+    else startHandlersRef.current.frameResort(start.pick, fetchResort(resortFetchArea(start.pick.bbox)), start.followConnected);
   }, []);
 
   /** "Box width (km)" — sets the SHAPE's real-world width. */

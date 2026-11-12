@@ -145,10 +145,12 @@ describe("reliefForRescaledPrint", () => {
 
 describe("parseScaleDenominator", () => {
   it("reads the ways a scale gets typed", () => {
-    for (const typed of ["25000", "25,000", "25 000", " 1:25000 ", "1 : 25,000", "25k", "25K"]) {
+    for (const typed of ["25000", "25,000", "25.000", "25 000", " 1:25000 ", "1 : 25,000", "25k", "25K"]) {
       expect(parseScaleDenominator(typed), typed).toBe(25_000);
     }
     expect(parseScaleDenominator("12.5k")).toBe(12_500);
+    expect(parseScaleDenominator("12,5k")).toBe(12_500);
+    expect(parseScaleDenominator("1.250.000")).toBe(MAX_SCALE_DENOMINATOR);
   });
 
   it("holds what it reads to the range", () => {
@@ -158,7 +160,7 @@ describe("parseScaleDenominator", () => {
   });
 
   it("refuses what isn't a scale", () => {
-    for (const typed of ["", "abc", "0", "-25000", "2:25000", "25kk", "1e5", "25.000.000"]) {
+    for (const typed of ["", "abc", "0", "-25000", "2:25000", "25kk", "1e5", "25.0.5"]) {
       expect(parseScaleDenominator(typed), typed).toBeNull();
     }
   });

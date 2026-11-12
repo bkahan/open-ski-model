@@ -139,8 +139,8 @@ no visible text. Replacing both:
   to a resort.
 - Untagged runs that start outside that reach are left out unless
   "Follow connected runs" is on (Ski runs panel, off by default, `fc=1`
-  in a link). It adds the untagged lines that come within 30 m of the
-  resort's lines, and the ones that join those, outward. The frame and
+  in a link). It adds the untagged lines that cross or come within 30 m
+  of the resort's lines, and the ones that join those, outward. The frame and
   outline are refitted. On Sugarloaf that is the four Burnt Mountain
   runs (frame 4.59 to 4.70 km). The data has no flag for "the resort
   lists this run", only whether lines meet, so the same rule takes the

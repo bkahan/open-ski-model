@@ -110,6 +110,7 @@ describe("resortLinesOnPlane", () => {
         [centerRun, { ...centerRun, id: "zone", isArea: true }],
         [{ id: "9", type: "chair_lift", coords: centerRun.coords }],
       ),
+      followConnected: false,
     });
     expect(lines).toHaveLength(2);
   });
@@ -127,8 +128,8 @@ describe("resortLinesOnPlane", () => {
       extent: bbox,
       convention: "north_america",
     };
-    expect(resortLinesOnPlane({ ...plane, resort, areaId: "jay" })).toHaveLength(3);
-    expect(resortLinesOnPlane({ ...plane, resort })).toHaveLength(4);
+    expect(resortLinesOnPlane({ ...plane, resort, areaId: "jay", followConnected: false })).toHaveLength(3);
+    expect(resortLinesOnPlane({ ...plane, resort, followConnected: false })).toHaveLength(4);
   });
 });
 

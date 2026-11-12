@@ -60,8 +60,8 @@ const jayRuns = [
 ];
 
 /** The frame the app fits to a picked resort, and the outline spec that goes with it. */
-function fittedSpec(resort: ResortData, rotation: number): OutlineSpec {
-  const frame = frameAroundResort(resort, AREA, rotation, OUTLINE_FRAME_PADDING);
+function fittedSpec(resort: ResortData, rotation: number, followConnected = false): OutlineSpec {
+  const frame = frameAroundResort(resort, AREA, rotation, OUTLINE_FRAME_PADDING, { followConnected });
   if (!frame) throw new Error("no lines to frame");
   const metersPerInch = frame.sideMeters / SIDE_IN;
   const [halfW, halfH] = shapeAABBHalf("rectangle", SIDE_IN, SIDE_IN, rotation);
@@ -73,6 +73,7 @@ function fittedSpec(resort: ResortData, rotation: number): OutlineSpec {
     rotation,
     resort,
     areaId: AREA,
+    followConnected,
     gridColumns: GRID,
   };
 }
@@ -164,6 +165,24 @@ describe("traceResortOutline", () => {
     const cell = SIDE_IN / (GRID - 1);
     const edge: Contour = shapeOutline("rectangle", SIDE_IN - 2 * cell, SIDE_IN - 2 * cell, 0);
     expect(gapBetween([ring], [edge])).toBeGreaterThan(0.05);
+  });
+
+  it("follows that chain when asked, in a frame fitted to it", () => {
+    const sidecountry = untaggedRun([[-72.493, 44.931], [-72.48, 44.928], [-72.468, 44.926]]);
+    const beyond = untaggedRun([[-72.468, 44.926], [-72.45, 44.925], [-72.43, 44.925]]);
+    const resort = resortOf([...jayRuns, sidecountry, beyond]);
+    const spec = fittedSpec(resort, 0, true);
+    expect(spec.bbox).not.toEqual(fittedSpec(resort, 0).bbox);
+    const ring = traceResortOutline(m, spec);
+    expect(ring).not.toBeNull();
+    if (!ring) return;
+    for (const point of onPlaneOf(spec, beyond)) expect(contains(ring, point)).toBe(true);
+    const cell = SIDE_IN / (GRID - 1);
+    const edge: Contour = shapeOutline("rectangle", SIDE_IN - 2 * cell, SIDE_IN - 2 * cell, 0);
+    expect(gapBetween([ring], [edge])).toBeGreaterThan(0.05);
+    // The same frame traced without the chain leaves its far end outside the ring.
+    const unfollowed = traceResortOutline(m, { ...spec, followConnected: false });
+    expect(unfollowed && contains(unfollowed, onPlaneOf(spec, beyond)[2])).toBe(false);
   });
 
   it("leaves out an untagged run that never comes near the resort", () => {

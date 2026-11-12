@@ -99,6 +99,12 @@ describe("resort url state", () => {
     expect(decoded.colorScheme).toBe("eu");
   });
 
+  it("leaves following connected runs off unless the link says 1", () => {
+    expect(decodeUrlState(new URLSearchParams("")).followConnected).toBeUndefined();
+    expect(decodeUrlState(new URLSearchParams("fc=0")).followConnected).toBeUndefined();
+    expect(decodeUrlState(new URLSearchParams("fc=yes")).followConnected).toBeUndefined();
+  });
+
   it("ignores junk values", () => {
     const decoded = decodeUrlState(new URLSearchParams("mw=abc&cs=mars&mw=-1"));
     expect(decoded.minRunWidthMm).toBeUndefined();

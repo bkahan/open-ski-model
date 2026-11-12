@@ -39,11 +39,17 @@ export function clampScaleDenominator(denominator: number): number {
 
 /**
  * The N a person typed for 1 : N, clamped to the range: "25,000",
- * "25 000", "1:25000" and "25k" all read as 25000. Null for anything
- * that isn't a scale.
+ * "25.000", "25 000", "1:25000" and "25k" all read as 25000. A comma or
+ * point with exactly three digits after it groups thousands; any other
+ * is a decimal mark ("12.5k", "12,5k"). Null for anything that isn't a
+ * scale.
  */
 export function parseScaleDenominator(text: string): number | null {
-  const match = /^(?:1:)?(\d+(?:\.\d+)?)(k?)$/i.exec(text.replace(/[,\s]/g, ""));
+  const plain = text
+    .replace(/\s/g, "")
+    .replace(/[.,](?=\d{3}(?:\D|$))/g, "")
+    .replace(",", ".");
+  const match = /^(?:1:)?(\d+(?:\.\d+)?)(k?)$/i.exec(plain);
   if (!match) return null;
   const typed = Number(match[1]) * (match[2] ? 1000 : 1);
   return typed > 0 ? clampScaleDenominator(typed) : null;
