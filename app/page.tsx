@@ -14,6 +14,10 @@
 //     shape — the area the elevation API samples. It's kept in sync with
 //     the shape parameters; the user manipulates the SHAPE on the map,
 //     and the bbox AABB follows.
+//   - "Resort" is not a frame the user sets. The footprint is the picked
+//     ski area's own outline, and the frame behind it (the terrain that
+//     gets sampled) is fitted to the resort's lines and never shown, so
+//     it cannot be dragged or sized to cut the resort off.
 //   - URL search params mirror this state so a deep link reopens the
 //     same view.
 
@@ -23,9 +27,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DensityControls from "@/components/DensityControls";
 import EngravingControls from "@/components/EngravingControls";
 import ResortControls from "@/components/ResortControls";
-import SearchBar from "@/components/SearchBar";
+import SearchBar, { resortToResult } from "@/components/SearchBar";
 import ShapeControls from "@/components/ShapeControls";
 import SizeControls, { type SizeState } from "@/components/SizeControls";
+import { useResortOutline } from "@/components/useResortOutline";
 import {
   bboxCenter,
   bboxContains,
@@ -45,6 +50,7 @@ import {
   DEFAULT_RESORT_SETTINGS,
   type ResortSettings,
 } from "@/lib/resort/settings";
+import type { OutlineSpec } from "@/lib/mesh/resort-outline";
 import type { ResortData, ResortRequest } from "@/lib/resort/types";
 import {
   HEX_FLAT_TO_LONG,
@@ -52,7 +58,7 @@ import {
   shapeIsRotatable,
   type Shape,
 } from "@/lib/shape";
-import { frameAroundResort } from "@/lib/resort/frame";
+import { frameAroundResort, OUTLINE_FRAME_PADDING } from "@/lib/resort/frame";
 import { lookupPlace, placeFromIndex, placeLine, resortBasePoint } from "@/lib/resort/place";
 import {
   DEFAULT_RELIEF_INCHES,
@@ -82,8 +88,24 @@ const ModelViewer = dynamic(() => import("@/components/ModelViewer"), {
   ),
 });
 
-const DEFAULT_CENTER: LngLat = [-72.5, 44.93];
 const DEFAULT_SHAPE_WIDTH_METERS = 5_000;
+/**
+ * What a first visit opens on: Jay Peak, as the ski-area index lists it,
+ * framed the way a search pick would be. A plain frame at a fixed center
+ * sat off to one side of the resort and cut its west edge off.
+ */
+const DEFAULT_RESORT = resortToResult({
+  id: "e1a32fce69402dd1c018c22b0216990d077531fa",
+  name: "Jay Peak Resort",
+  location: "Vermont, United States",
+  countryCode: "US",
+  convention: "north_america",
+  center: [-72.512278, 44.935604],
+  bearing: 271.87,
+  widthMeters: 3516,
+  heightMeters: 3429,
+  runCount: 79,
+});
 const DEFAULT_GRID_SIZE = 256;
 const MIN_GRID_SIZE = 64;
 const MAX_GRID_SIZE = 2048;
@@ -94,14 +116,29 @@ const MAX_GRID_SIZE = 2048;
 const RESORT_FETCH_SCALE = 1.6;
 const RESORT_SEARCH_MIN_METERS = 8_000;
 const RESORT_FRAME_PADDING = 1.08;
-/** Leaves room for the outline's own margin around the outermost runs. */
-const RESORT_OUTLINE_PADDING = 1.12;
 const RESORT_FRAME_MIN_RUNS = 3;
 const RESORT_FETCH_DEBOUNCE_MS = 700;
 /** Mirrors the server cap in /api/resort. */
 const RESORT_MAX_FETCH_DEG = 1;
 
+const RESORT_LINES_FAILED =
+  "Couldn't load this resort's runs, so it is shown as a plain frame. Choose Resort to try again.";
+
 type View = "map" | "loading" | "viewer";
+
+/** The resort the Resort shape is about, kept so the shape can be gone back to. */
+interface ResortPick {
+  id: string;
+  /** Where to look for its lines. */
+  bbox: Bbox;
+  /** Frame rotation that turns the resort's base toward the viewer. */
+  rotation: number;
+}
+
+/** Index bearings run clockwise from north; frame rotation is positive counter-clockwise. */
+function rotationForBearing(bearing: number): number {
+  return ((Math.round(-bearing) % 360) + 360) % 360;
+}
 
 /** Area to fetch for a frame: padded for drag headroom, unless padding would exceed the API cap. */
 function resortFetchArea(bbox: Bbox): Bbox {
@@ -180,6 +217,9 @@ export default function Home() {
   const [shape, setShape] = useState<Shape>("rectangle");
   const [silhouette, setSilhouette] = useState(false);
   const [areaId, setAreaId] = useState<string | null>(null);
+  const [resortPick, setResortPick] = useState<ResortPick | null>(null);
+  /** True from picking a resort until its frame has been fitted to its lines. */
+  const [resortFitting, setResortFitting] = useState(false);
   const [rotation, setRotation] = useState(0);
   const [gridSize, setGridSize] = useState<number>(DEFAULT_GRID_SIZE);
   const [engraveLabel, setEngraveLabel] = useState<boolean>(false);
@@ -197,6 +237,13 @@ export default function Home() {
   const [resortError, setResortError] = useState<string | null>(null);
   const resortAbortRef = useRef<AbortController | null>(null);
   const didHydrateFromUrl = useRef(false);
+  /** What the first render has to pick once handlers exist: the default resort, or a link's. */
+  const startRef = useRef<ResortPick | "default" | null>(null);
+  // Latest value for loadResort, which is created once.
+  const silhouetteRef = useRef(silhouette);
+  useEffect(() => {
+    silhouetteRef.current = silhouette;
+  });
 
   // --- Hydrate from URL on mount ---
   useEffect(() => {
@@ -216,8 +263,14 @@ export default function Home() {
     else if (sh === "hexagon") h = w * HEX_FLAT_TO_LONG;
     else if (locked) h = w;
 
+    // A link that names its ski area can always go (back) to the Resort
+    // shape. The shape is an outline of one area, so a link asking for it
+    // without naming one opens as a plain frame.
+    const linkPick = parsed.areaId && parsed.bbox ? { id: parsed.areaId, bbox: parsed.bbox, rotation: rot } : null;
+    const resortShape = sh === "rectangle" && (parsed.silhouette ?? false) && linkPick !== null;
     setShape(sh);
-    setSilhouette(sh === "rectangle" && (parsed.silhouette ?? false));
+    setSilhouette(resortShape);
+    setResortPick(linkPick);
     setAreaId(parsed.areaId ?? null);
     setRotation(rot);
     setSize({
@@ -241,17 +294,12 @@ export default function Home() {
     });
     setLabel(parsed.label ?? "Jay Peak");
     setPlace(parsed.place ?? "");
-    const nextBbox = parsed.bbox
-      ?? bboxForShape(
-        DEFAULT_CENTER,
-        sh,
-        w,
-        h,
-        rot,
-        DEFAULT_SHAPE_WIDTH_METERS / w,
-      );
-    setBbox(nextBbox);
+    setBbox(parsed.bbox ?? null);
     setFlyTo(parsed.bbox ? bboxCenter(parsed.bbox) : null);
+    // A first visit has no frame to restore and opens on the default
+    // resort. A Resort link's frame is not trusted either: it may have
+    // been dragged or sized before frames were fitted, so it is refitted.
+    startRef.current = !parsed.bbox ? "default" : resortShape ? linkPick : null;
   }, []);
 
   // --- Mirror state to URL whenever it stabilizes ---
@@ -296,6 +344,11 @@ export default function Home() {
       if (ctrl.signal.aborted) return null;
       console.error("[resort]", err);
       setResortError(err instanceof Error ? err.message : "resort lookup failed");
+      if (silhouetteRef.current) {
+        // No lines, no outline: don't leave the Resort shape waiting on them.
+        setSilhouette(false);
+        setError(RESORT_LINES_FAILED);
+      }
       return null;
     } finally {
       if (resortAbortRef.current === ctrl) setResortLoading(false);
@@ -312,7 +365,11 @@ export default function Home() {
   // the user to move the frame, rather than hammering Overpass.
   const attemptedBboxRef = useRef<Bbox | null>(null);
   useEffect(() => {
-    if (!bbox || !resortSettings.showRuns || resortLoading) return;
+    // The outline is made of the lines, so the Resort shape needs them
+    // whether or not runs are shown.
+    if (!bbox || (!resortSettings.showRuns && !silhouette) || resortLoading) return;
+    // A resort being fitted fetches its own lines and moves the frame when they land.
+    if (resortFitting) return;
     if (resort && bboxContains(resort.bbox, bbox)) return;
     if (attemptedBboxRef.current === bbox) return;
     const timer = setTimeout(() => {
@@ -320,7 +377,7 @@ export default function Home() {
       void loadResort(resortFetchArea(bbox));
     }, RESORT_FETCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [bbox, resort, resortLoading, resortSettings.showRuns, loadResort]);
+  }, [bbox, resort, resortLoading, resortFitting, resortSettings.showRuns, silhouette, loadResort]);
 
   // The resort whose town is still being looked up for the plate's second
   // line. A newer pick, or the user going to edit the line, drops it.
@@ -331,6 +388,26 @@ export default function Home() {
   useEffect(() => {
     bboxRef.current = bbox;
   }, [bbox]);
+
+  // The outline the map shows: the ring the model will be cut to, traced
+  // from the fitted frame and the lines that cover it.
+  const outlineSpec = useMemo<OutlineSpec | null>(() => {
+    if (!silhouette || resortFitting || !bbox || !areaId) return null;
+    if (!resort || !bboxContains(resort.bbox, bbox)) return null;
+    return {
+      bbox,
+      shape: "rectangle",
+      widthInches: size.widthInches,
+      heightInches: size.heightInches,
+      rotation,
+      resort,
+      areaId,
+      gridColumns: gridSize,
+    };
+  }, [silhouette, resortFitting, bbox, areaId, resort, size.widthInches, size.heightInches, rotation, gridSize]);
+  const outline = useResortOutline(outlineSpec);
+  /** The Resort shape has nothing to generate from until an outline has been traced. */
+  const resortPending = silhouette && (outlineSpec === null || (!outline.settled && outline.ring === null));
 
   const resolvedScheme = useMemo(
     () => resolveColorScheme(resortSettings.colorScheme, bbox ?? [0, 0, 0, 0], resort?.convention ?? null),
@@ -390,30 +467,56 @@ export default function Home() {
     setFlyTo(bboxCenter(framed));
   };
 
-  /** Replaces the index's rough viewport with one around the resort's own lines. */
-  const fitFrameToResort = async (
-    result: SearchResult,
-    initialBbox: Bbox,
-    frameRotation: number,
-    widthInches: number,
-    heightInches: number,
-    lines: Promise<ResortData>,
-  ) => {
-    const data = await lines;
-    if (bboxRef.current !== initialBbox) return;
-    const frame = frameAroundResort(data, result.id, frameRotation, RESORT_OUTLINE_PADDING);
-    if (!frame) return;
-    setBbox(
-      bboxForShape(
-        frame.center,
-        "rectangle",
-        widthInches,
-        heightInches,
-        frameRotation,
-        frame.sideMeters / Math.min(widthInches, heightInches),
-      ),
-    );
-    setFlyTo(frame.center);
+  // The pick whose frame is being fitted. A newer pick, or leaving the
+  // Resort shape, makes an older fit's answer stale.
+  const resortFitRef = useRef<symbol | null>(null);
+
+  /**
+   * Makes the Resort shape about `pick`: a square frame turned to the
+   * resort's bearing and fitted around its own lines. Until the lines are
+   * in there is no outline to show, and nothing is generated from the
+   * index's rough viewport, which can sit off-center and cut runs off.
+   */
+  const frameResort = (pick: ResortPick, lines: Promise<ResortData>) => {
+    const fit = Symbol("resort fit");
+    resortFitRef.current = fit;
+    const side = size.widthInches;
+    setShape("rectangle");
+    setSilhouette(true);
+    setAreaId(pick.id);
+    setResortPick(pick);
+    setRotation(pick.rotation);
+    setSize((s) => ({ ...s, heightInches: s.widthInches }));
+    setBbox(snapBboxToAspect(scaleBbox(pick.bbox, RESORT_FRAME_PADDING), 1, 0));
+    setResortFitting(true);
+    setError(null);
+
+    lines
+      .then((data) => {
+        if (resortFitRef.current !== fit) return;
+        setResortFitting(false);
+        const frame = frameAroundResort(data, pick.id, pick.rotation, OUTLINE_FRAME_PADDING);
+        if (!frame) {
+          // Nothing carries this ski area's tag, so there is nothing to outline.
+          setSilhouette(false);
+          setAreaId(null);
+          setResortPick(null);
+          setError("No runs are mapped for this resort, so it is shown as a plain frame.");
+          return;
+        }
+        const fitted = bboxForShape(frame.center, "rectangle", side, side, pick.rotation, frame.sideMeters / side);
+        setBbox(fitted);
+        setFlyTo(frame.center);
+        // The same lines draw the outline: skip a second request when they cover the frame.
+        if (bboxContains(data.bbox, fitted)) setResort(data);
+      })
+      .catch((err: unknown) => {
+        console.error("[resort-frame]", err);
+        if (resortFitRef.current !== fit) return;
+        setResortFitting(false);
+        setSilhouette(false);
+        setError(RESORT_LINES_FAILED);
+      });
   };
 
   /**
@@ -437,30 +540,18 @@ export default function Home() {
     setPlace(result.kind === "resort" ? placeLine(placeFromIndex(result.location ?? null, result.countryCode ?? null)) : "");
     placeLookupRef.current = result.kind === "resort" ? result.id : null;
     setFlyTo(result.center);
-    setAreaId(result.kind === "resort" ? result.id : null);
 
     if (result.kind === "resort") {
-      // The index gives the resort's natural viewport: turn the frame to
-      // its bearing (when the shape has one) and fit its padded bounds.
-      // Bearings run clockwise from north; our rotation is positive CCW.
-      // Resorts default to their own outline with the name on it.
-      const nextRotation =
-        result.bearing !== undefined
-          ? ((Math.round(-result.bearing) % 360) + 360) % 360
-          : rotation;
-      const widthInches = size.widthInches;
-      const heightInches = shape === "rectangle" ? size.heightInches : widthInches;
-      setShape("rectangle");
-      setSilhouette(true);
+      // Resorts open as their own outline with the name on it.
       setEngraveLabel(true);
-      setSize((s) => ({ ...s, heightInches }));
-      setRotation(nextRotation);
-      const [hW, hH] = shapeAABBHalf("rectangle", widthInches, heightInches, nextRotation);
-      const viewport = snapBboxToAspect(scaleBbox(result.bbox, RESORT_FRAME_PADDING), hW / hH, 0);
-      setBbox(viewport);
       const lines = fetchResort(resortFetchArea(result.bbox));
-      fitFrameToResort(result, viewport, nextRotation, widthInches, heightInches, lines).catch((err) =>
-        console.error("[resort-frame]", err),
+      frameResort(
+        {
+          id: result.id,
+          bbox: result.bbox,
+          rotation: result.bearing !== undefined ? rotationForBearing(result.bearing) : rotation,
+        },
+        lines,
       );
       fillPlace(result, lines).catch((err: unknown) => {
         if (placeLookupRef.current === result.id) placeLookupRef.current = null;
@@ -469,6 +560,13 @@ export default function Home() {
       return;
     }
 
+    // A place is not a ski area: it gets a plain frame, and the Resort
+    // shape has nothing to go back to.
+    resortFitRef.current = null;
+    setResortFitting(false);
+    setSilhouette(false);
+    setAreaId(null);
+    setResortPick(null);
     const initial = snapBboxToAspect(result.bbox, aabbAspect, DEFAULT_SHAPE_WIDTH_METERS);
     setBbox(initial);
     if (resortSettings.showRuns) {
@@ -476,9 +574,23 @@ export default function Home() {
     }
   };
 
+  // What the link asked the first render for (see the hydrate effect): the
+  // default resort, picked as a search would, or the link's own, refitted.
+  const startHandlersRef = useRef({ handleSearch, frameResort });
+  useEffect(() => {
+    startHandlersRef.current = { handleSearch, frameResort };
+  });
+  useEffect(() => {
+    const start = startRef.current;
+    startRef.current = null;
+    if (start === "default") startHandlersRef.current.handleSearch(DEFAULT_RESORT);
+    else if (start) startHandlersRef.current.frameResort(start, fetchResort(resortFetchArea(start.bbox)));
+  }, []);
+
   /** "Box width (km)" — sets the SHAPE's real-world width. */
   const handleShapeWidthMetersChange = (widthMeters: number) => {
-    if (!bbox) return;
+    // The Resort shape's ground is the resort's, not a width to set.
+    if (!bbox || silhouette) return;
     const newScale = widthMeters / size.widthInches;
     const center = bboxCenter(bbox);
     setBbox(
@@ -589,6 +701,8 @@ export default function Home() {
   /** Shape change — adjust heightInches per new shape rules; refit bbox. */
   const handleShapeChange = (newShape: Shape) => {
     if (!bbox) return;
+    resortFitRef.current = null;
+    setResortFitting(false);
     setSilhouette(false);
     const scale = scaleMPerIn(
       bbox,
@@ -615,9 +729,14 @@ export default function Home() {
     setBbox(bboxForShape(center, newShape, newW, newH, newRot, scale));
   };
 
+  /**
+   * To the picked resort's outline, refitted: the frame may have been
+   * moved off it in another shape, and a click while already on Resort is
+   * the way to retry lines that failed to load.
+   */
   const handleSilhouette = () => {
-    if (shape !== "rectangle") handleShapeChange("rectangle");
-    setSilhouette(true);
+    if (!resortPick) return;
+    frameResort(resortPick, fetchResort(resortFetchArea(resortPick.bbox)));
   };
 
   const handleSizeChange = (newSize: SizeState) => {
@@ -625,10 +744,11 @@ export default function Home() {
       setSize(newSize);
       return;
     }
-    // Coercion: enforce shape-specific aspect.
+    // Coercion: enforce shape-specific aspect. The Resort shape's hidden
+    // frame stays square, as it was fitted.
     let w = newSize.widthInches;
     let h = newSize.heightInches;
-    if (shape === "circle") h = w;
+    if (shape === "circle" || silhouette) h = w;
     else if (shape === "hexagon") h = w * HEX_FLAT_TO_LONG;
     else if (newSize.aspectLocked) h = w;
 
@@ -717,6 +837,7 @@ export default function Home() {
         <ShapeControls
           shape={shape}
           silhouette={silhouette}
+          resortAvailable={resortPick !== null}
           onChange={handleShapeChange}
           onSilhouette={handleSilhouette}
         />
@@ -724,6 +845,7 @@ export default function Home() {
         <SizeControls
           size={size}
           shape={shape}
+          resortMode={silhouette}
           rotation={rotation}
           onChange={handleSizeChange}
           bbox={bbox}
@@ -775,10 +897,10 @@ export default function Home() {
           <button
             type="button"
             onClick={handleGenerate}
-            disabled={!bbox}
+            disabled={!bbox || resortPending}
             className="w-full rounded-md bg-amber-400 text-slate-950 font-semibold py-2.5 text-sm hover:bg-amber-300 disabled:opacity-50 disabled:cursor-not-allowed transition"
           >
-            Generate 3D model
+            {resortPending ? "Loading resort\u2026" : "Generate 3D model"}
           </button>
         )}
 
@@ -845,6 +967,9 @@ export default function Home() {
             resort={resortSettings.showRuns ? resort : null}
             colorScheme={resolvedScheme}
             showLifts={resortSettings.showLifts}
+            outline={silhouette ? outline.ring : null}
+            outlineId={silhouette ? areaId : null}
+            frameHidden={silhouette}
           />
         )}
         {view === "viewer" && snapshot && (

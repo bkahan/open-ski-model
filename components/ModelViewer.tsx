@@ -40,14 +40,11 @@ import { loadManifold, vertexDataFromManifold, type ColorAt, type TriMesh } from
 import { buildColorBodies, treelineFor } from "@/lib/mesh/multicolor";
 import { buildThreeMf } from "@/lib/mesh/three-mf";
 import { plateFacingDeg } from "@/lib/mesh/nameplate";
-import {
-  buildResortOutline,
-  OUTLINE_PLINTH_HEIGHT_IN,
-  outlineMask,
-} from "@/lib/mesh/silhouette";
+import { traceResortOutline } from "@/lib/mesh/resort-outline";
+import { OUTLINE_PLINTH_HEIGHT_IN, outlineMask } from "@/lib/mesh/silhouette";
 import type { Contour } from "@/lib/mesh/text";
 import { plinthHeightInches } from "@/lib/mesh/plinth";
-import { resortFrontBearing, resortInlayGroups, resortLinesOnPlane } from "@/lib/mesh/runs";
+import { resortFrontBearing, resortInlayGroups } from "@/lib/mesh/runs";
 import { exportToStep } from "@/lib/mesh/step-export";
 import { loadFont } from "@/lib/mesh/text";
 import type { ElevationResponse } from "@/lib/elevation/types";
@@ -222,24 +219,7 @@ export default function ModelViewer({
     loadManifold()
       .then((m) => {
         if (cancelled) return;
-        const [halfW] = shapeAABBHalf(
-          outlineInputs.shape,
-          outlineInputs.widthInches,
-          outlineInputs.heightInches,
-          outlineInputs.rotation,
-        );
-        const cell = (halfW * 2) / (outlineInputs.data.width - 1);
-        const ring = buildResortOutline(
-          m,
-          resortLinesOnPlane(outlineInputs),
-          shapeOutline(
-            outlineInputs.shape,
-            outlineInputs.widthInches - 2 * cell,
-            outlineInputs.heightInches - 2 * cell,
-            outlineInputs.rotation,
-          ),
-          Math.max(outlineInputs.widthInches, outlineInputs.heightInches),
-        );
+        const ring = traceResortOutline(m, { ...outlineInputs, gridColumns: outlineInputs.data.width });
         setTraced({ inputs: outlineInputs, ring });
       })
       .catch((err: unknown) => {

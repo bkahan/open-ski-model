@@ -90,15 +90,30 @@ no visible text. Replacing both:
 
 ### Resort silhouette (done)
 
-- "Resort" footprint, the default after picking a resort: the frame stays
-  a rectangle on the map and the model is cut to an outline around its
-  runs and lifts (buffered 3% of the print, bays closed at 7%, detached
-  clusters and holes dropped). Polygon runs don't count: they aren't drawn,
-  and OSM can map a whole backcountry zone as one. Lines tagged only to
-  another ski area don't count either. Manifold intersects it, so edges
-  are clean.
-- Picking a resort frames it from the runs and lifts tagged to it. The
-  index viewport is used only until those load.
+- "Resort" footprint, the default after picking a resort: the model is
+  cut to an outline around its runs and lifts (buffered 3% of the print,
+  bays closed at 7%, detached clusters and holes dropped). Polygon runs
+  don't count: they aren't drawn, and OSM can map a whole backcountry
+  zone as one. Lines tagged only to another ski area don't count either.
+  Manifold intersects it, so edges are clean.
+- The map shows that outline, not a frame. It is traced by the same code
+  the model is cut with (`lib/mesh/resort-outline.ts`). The frame behind
+  it, a square turned to the resort's bearing, is fitted to the resort's
+  lines and is not the user's to drag, size or turn. Until the lines have
+  loaded there is nothing to generate.
+- One rule says which lines are a ski area's (`resortLines`): those
+  tagged to it, and untagged ones with a point within 5% of the tagged
+  lines' bounds. The frame and the outline both use it. They used to
+  differ, and a chain of untagged runs leading away from the resort ran
+  the outline into the frame's edge, where it was cut off flat.
+- Resort is on offer once a ski area has been picked in search. A first
+  visit opens on Jay Peak picked that way; it used to open on a plain
+  frame at a fixed center that cut Jay's west edge off.
+- Rectangle, Circle and Hex are plain shapes: a frame to drag, never cut
+  to a resort.
+- Open: untagged runs that start outside the resort (Sugarloaf's far
+  east glades) are left out of the outline. Print size is still the
+  hidden frame's side, so the resort prints a little smaller than stated.
 - With the name on, a 4 mm slab follows the outline with a flat tab on
   the base side carrying the name and rose; the brand goes under the tab.
 

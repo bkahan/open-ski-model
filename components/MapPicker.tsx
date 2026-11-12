@@ -19,7 +19,11 @@
 //         is the anchor.
 //       · Drag the perimeter handle (circle / hex) → change diameter.
 //       · Drag the rotation handle → rotate around center.
+//   - A resort's outline replaces all of that: `outline` is drawn as a
+//     map layer and, with `frameHidden`, the shape and its handles are
+//     not shown, so there is nothing to drag.
 
+import type { FeatureCollection, Polygon } from "geojson";
 import maplibregl, { type GeoJSONSource, type Map as MlMap } from "maplibre-gl";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
@@ -42,6 +46,13 @@ const ROTATION_HANDLE_OFFSET_PX = 28;
 const RESORT_SOURCE = "resort";
 const RUN_LAYER = "resort-runs";
 const LIFT_LAYER = "resort-lifts";
+const OUTLINE_SOURCE = "resort-outline";
+const OUTLINE_FILL_LAYER = "resort-outline-fill";
+const OUTLINE_EDGE_LAYER = "resort-outline-edge";
+const OUTLINE_COLOR = "#f5b942";
+/** Room left around an outline when the map is moved to show all of it. */
+const OUTLINE_FIT_PADDING_PX = 48;
+const OUTLINE_FIT_MAX_ZOOM = 14;
 
 interface Props {
   bbox: Bbox | null;
@@ -62,6 +73,12 @@ interface Props {
   resort: ResortData | null;
   colorScheme: ColorScheme;
   showLifts: boolean;
+  /** The ring the model will be cut to, drawn in place of the shape; null draws none. */
+  outline: LngLat[] | null;
+  /** Which ski area the outline is of. The map moves to an outline once per area. */
+  outlineId: string | null;
+  /** Hides the shape and its handles: the footprint is the outline, not a frame to drag. */
+  frameHidden: boolean;
 }
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY ?? "";
@@ -114,6 +131,30 @@ function localToGeo(
   return [center[0] + dLng, center[1] + dLat];
 }
 
+/**
+ * Runs `apply` as soon as the style can take sources and layers, and
+ * returns a way to stop waiting. isStyleLoaded() is no test for that: it
+ * is false while any tile is still on its way, which on a slow connection
+ * is most of the time, and waiting for "idle" waits for every tile. The
+ * style itself says when it isn't ready, by throwing from addSource.
+ */
+function whenStyleReady(map: MlMap, apply: () => void): () => void {
+  const attempt = () => {
+    try {
+      apply();
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("not done loading")) return;
+      throw err;
+    }
+    map.off("styledata", attempt);
+  };
+  map.on("styledata", attempt);
+  attempt();
+  return () => {
+    map.off("styledata", attempt);
+  };
+}
+
 /** Add the resort source + layers once; later calls are no-ops. */
 function ensureResortLayers(map: MlMap) {
   if (map.getSource(RESORT_SOURCE)) return;
@@ -142,6 +183,48 @@ function ensureResortLayers(map: MlMap) {
       "line-opacity": 0.9,
     },
   });
+}
+
+type OutlineGeoJSON = FeatureCollection<Polygon>;
+
+function outlineGeoJSON(ring: LngLat[] | null): OutlineGeoJSON {
+  if (!ring || ring.length < 3) return { type: "FeatureCollection", features: [] };
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: {},
+        geometry: { type: "Polygon", coordinates: [[...ring, ring[0]]] },
+      },
+    ],
+  };
+}
+
+/** Add the outline source + layers once, under the runs when those exist. */
+function ensureOutlineLayers(map: MlMap) {
+  if (map.getSource(OUTLINE_SOURCE)) return;
+  const under = map.getLayer(LIFT_LAYER) ? LIFT_LAYER : undefined;
+  map.addSource(OUTLINE_SOURCE, { type: "geojson", data: outlineGeoJSON(null) });
+  map.addLayer(
+    {
+      id: OUTLINE_FILL_LAYER,
+      type: "fill",
+      source: OUTLINE_SOURCE,
+      paint: { "fill-color": OUTLINE_COLOR, "fill-opacity": 0.12 },
+    },
+    under,
+  );
+  map.addLayer(
+    {
+      id: OUTLINE_EDGE_LAYER,
+      type: "line",
+      source: OUTLINE_SOURCE,
+      layout: { "line-join": "round" },
+      paint: { "line-color": OUTLINE_COLOR, "line-width": 2 },
+    },
+    under,
+  );
 }
 
 /** Convert window-relative pointer coords to map-container-relative px. */
@@ -187,6 +270,9 @@ export default function MapPicker({
   resort,
   colorScheme,
   showLifts,
+  outline,
+  outlineId,
+  frameHidden,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -422,27 +508,40 @@ export default function MapPicker({
   }, [flyTo]);
 
   // --- 2b. Runs + lifts layer ---
-  // The style loads asynchronously; if it isn't ready yet, apply on the
-  // next idle instead of racing addSource.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     const geojson: ResortFeatureCollection = resort
       ? resortToGeoJSON(resort, colorScheme, showLifts)
       : EMPTY_RESORT_GEOJSON;
-    const apply = () => {
+    return whenStyleReady(map, () => {
       ensureResortLayers(map);
       map.getSource<GeoJSONSource>(RESORT_SOURCE)?.setData(geojson);
-    };
-    if (map.isStyleLoaded()) {
-      apply();
-      return;
-    }
-    map.once("idle", apply);
-    return () => {
-      map.off("idle", apply);
-    };
+    });
   }, [resort, colorScheme, showLifts]);
+
+  // --- 2c. Resort outline layer ---
+  // The first outline of a ski area brings the map to it if it isn't
+  // wholly on screen, so a picked resort always ends up in view. Later
+  // rings of the same area (a size change retraces) leave the view alone.
+  const fittedOutlineIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    return whenStyleReady(map, () => {
+      ensureOutlineLayers(map);
+      map.getSource<GeoJSONSource>(OUTLINE_SOURCE)?.setData(outlineGeoJSON(outline));
+      if (!outline || outline.length < 3 || outlineId === fittedOutlineIdRef.current) return;
+      fittedOutlineIdRef.current = outlineId;
+      const bounds = outline.reduce(
+        (box, point) => box.extend(point),
+        new maplibregl.LngLatBounds(outline[0], outline[0]),
+      );
+      const view = map.getBounds();
+      if (view.contains(bounds.getSouthWest()) && view.contains(bounds.getNorthEast())) return;
+      map.fitBounds(bounds, { padding: OUTLINE_FIT_PADDING_PX, maxZoom: OUTLINE_FIT_MAX_ZOOM, duration: 600 });
+    });
+  }, [outline, outlineId]);
 
   // --- 3. Drag-to-move: dragging the shape's interior ---
   useEffect(() => {
@@ -733,7 +832,7 @@ export default function MapPicker({
         width="100%"
         height="100%"
       >
-        <g ref={groupRef}>
+        <g ref={groupRef} style={frameHidden ? { display: "none" } : undefined}>
           <path
             ref={shapePathRef}
             className="shape-fill"

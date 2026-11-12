@@ -30,3 +30,38 @@ used made-up terrain, so they could not have caught it.
   service. Say which parts were only checked that way.
 - When a request and its reply should cover the same ground, assert it:
   compare the extent that came back with the extent that was asked for.
+
+## Two things that must agree need one rule, not two that look alike
+
+2026-11-11. A resort's frame was fitted to one set of lines and its
+outline traced around another. They agreed on most resorts. Where
+untagged runs led away from the resort, the outline ran into the frame's
+edge and was cut off flat.
+
+- When one result has to fit inside another, compute both from the same
+  inputs through the same function (`resortLines`), and test the
+  containment, not each half.
+- The first visit is a state too. The default view cut Jay Peak's edge
+  and no test or walkthrough looked at it, because every check started
+  with a search.
+
+## Don't stack pull requests the owner merges from a phone
+
+2026-11-11. Four stacked PRs were merged bottom-up within two minutes.
+Each landed in its own base branch, and `main` ended up without most of
+the work. It happened a second time when a fix was left pointed at a
+branch that had already been merged.
+
+- Open every PR against `main`. If one needs another first, say so and
+  wait for the merge before opening the next, or put both in one PR.
+- After the owner says "merged", check that `main` has the commits
+  before building on it.
+
+## A map layer waiting for "idle" waits for every tile
+
+2026-11-11. Runs and the outline were added to the map on its next
+`idle`, which only comes when all tiles have loaded. With tiles slow or
+failing, the layers never appeared.
+
+- `isStyleLoaded()` is false while tiles are loading. Add sources when
+  the style can take them (`whenStyleReady` in `MapPicker.tsx`).

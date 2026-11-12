@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { metersPerDegLng } from "@/lib/bbox";
 import type { LngLat } from "@/lib/types";
 
-import { frameAroundResort } from "./frame";
+import { frameAroundResort, resortLines } from "./frame";
 import type { ResortData, SkiRun } from "./types";
 
 const run = (coords: LngLat[], overrides: Partial<SkiRun> = {}): SkiRun => ({
@@ -71,5 +71,30 @@ describe("frameAroundResort", () => {
 
   it("returns null when nothing is tagged", () => {
     expect(frameAroundResort(resortOf([run([a, b], { areas: ["burke"] })]), "jay", 0, 1)).toBeNull();
+  });
+});
+
+describe("resortLines", () => {
+  const far: LngLat = [-72.8, 44.6];
+
+  it("is the tagged lines and the untagged ones that reach them, lifts included", () => {
+    const tagged = run([a, b]);
+    const reaching = run([a, far], { areas: [] });
+    const lift = { id: "lift", type: "chair_lift" as const, coords: [a, b], areas: ["jay"] };
+    const resort = {
+      ...resortOf([
+        tagged,
+        reaching,
+        run([a, far], { isArea: true }),
+        run([b, far], { areas: ["burke"] }),
+        run([far, [-72.81, 44.61]], { areas: [] }),
+      ]),
+      lifts: [lift],
+    };
+    expect(resortLines(resort, "jay")).toEqual([tagged, lift, reaching]);
+  });
+
+  it("is empty when nothing carries the tag, untagged lines or not", () => {
+    expect(resortLines(resortOf([run([a, b], { areas: [] }), run([a, b], { areas: ["burke"] })]), "jay")).toEqual([]);
   });
 });
