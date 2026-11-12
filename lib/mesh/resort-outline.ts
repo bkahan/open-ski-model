@@ -15,6 +15,8 @@ export interface OutlineSpec extends FrameSpec {
   resort: ResortData;
   /** The ski area the outline is of; without one, every line in the frame counts. */
   areaId?: string | null;
+  /** Also take untagged lines that only join the ski area's further out (resortLines). */
+  followConnected?: boolean;
   /** Columns of the elevation grid the frame is sampled on. */
   gridColumns: number;
 }

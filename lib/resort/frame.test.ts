@@ -98,3 +98,57 @@ describe("resortLines", () => {
     expect(resortLines(resortOf([run([a, b], { areas: [] }), run([a, b], { areas: ["burke"] })]), "jay")).toEqual([]);
   });
 });
+
+describe("resortLines, following connected runs", () => {
+  const untagged = (id: string, coords: LngLat[]): SkiRun => run(coords, { id, areas: [] });
+  // Three kilometers west of the tagged run, well outside its reach.
+  const out: LngLat = [-72.56, 44.92];
+  const further: LngLat = [-72.58, 44.91];
+  const furthest: LngLat = [-72.6, 44.9];
+  const tagged = run([a, b]);
+  const traverse = untagged("traverse", [a, out]);
+  const glade = untagged("glade", [out, further]);
+  const lowerGlade = untagged("lower glade", [further, furthest]);
+
+  it("leaves them out unless asked", () => {
+    const resort = resortOf([tagged, traverse, glade, lowerGlade]);
+    expect(resortLines(resort, "jay")).toEqual([tagged, traverse]);
+    expect(resortLines(resort, "jay", false)).toEqual([tagged, traverse]);
+  });
+
+  it("follows a chain of untagged runs outward from the resort", () => {
+    // Listed furthest first: the chain is found whatever order the data is in.
+    const resort = resortOf([lowerGlade, glade, tagged, traverse]);
+    expect(resortLines(resort, "jay", true)).toEqual([tagged, traverse, glade, lowerGlade]);
+  });
+
+  it("takes a run that ends on the middle of another, not only at its ends", () => {
+    const midway: LngLat = [-72.54, 44.92];
+    const spur = untagged("spur", [[-72.54, 44.9], midway]);
+    expect(resortLines(resortOf([tagged, traverse, spur]), "jay", true)).toEqual([tagged, traverse, spur]);
+  });
+
+  it("counts lines within a run's width as meeting, and no further", () => {
+    const metersNorth = (meters: number): LngLat => [out[0], out[1] + meters / 111_320];
+    const close = untagged("close", [metersNorth(20), [-72.56, 44.95]]);
+    const apart = untagged("apart", [metersNorth(60), [-72.57, 44.95]]);
+    expect(resortLines(resortOf([tagged, traverse, close]), "jay", true)).toContain(close);
+    expect(resortLines(resortOf([tagged, traverse, apart]), "jay", true)).not.toContain(apart);
+  });
+
+  it("never takes a neighbor's lines, or reaches through them", () => {
+    const neighbors = run([out, further], { id: "neighbors", areas: ["burke"] });
+    const beyondNeighbor = untagged("beyond", [further, furthest]);
+    const stray = untagged("stray", [[-72.9, 44.5], [-72.91, 44.51]]);
+    const resort = resortOf([tagged, traverse, neighbors, beyondNeighbor, stray]);
+    expect(resortLines(resort, "jay", true)).toEqual([tagged, traverse]);
+  });
+
+  it("widens the frame to hold what it follows", () => {
+    const resort = resortOf([tagged, traverse, glade, lowerGlade]);
+    const plain = frameAroundResort(resort, "jay", 0, 1)!;
+    const followed = frameAroundResort(resort, "jay", 0, 1, true)!;
+    expect(followed.sideMeters).toBeGreaterThan(plain.sideMeters * 1.3);
+    expect(followed.center[0]).toBeCloseTo((-72.6 + -72.5) / 2, 5);
+  });
+});
