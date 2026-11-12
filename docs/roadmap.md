@@ -14,7 +14,7 @@ recorded here.
 | Resort shape: outline on the map, fitted frame (#9) | In `main`, not verified | Resort silhouette |
 | Size set by size or by scale 1 : N (#10) | In `main`, not verified | Print sizing |
 | Follow connected runs (#11) | In `main`, not verified | Resort silhouette |
-| Color bodies and 3MF export | In `main`, needs a slicer test | Multicolor |
+| Color bodies and 3MF export | In `main`. Marked as a Bambu file after the first slicer test; not re-tested | Multicolor |
 | Filament colors and types that reach the slicer | Not started | Multicolor |
 | Preview colors from the filament list | Not started | Multicolor |
 | Brand text and compass letters for a 0.4 mm nozzle | Not started | E5 |

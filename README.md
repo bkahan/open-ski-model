@@ -104,7 +104,9 @@ bodies, or a watertight `.stl` / `.step`.
   lifts and text in black. A "Second AMS" option keeps every color
   separate and adds forest green to the terrain below a treeline.
   Runs and lifts are solid bodies 0.6 mm deep, flush with the surface.
-  The state of the Bambu Studio test is in `docs/roadmap.md`.
+  The file is marked as a Bambu Studio file so Studio keeps the
+  filament numbers. Filament colors and types don't travel with it
+  yet. Not re-tested in Studio since that mark was added.
 
 - **STL export** in millimeters — pop it into Cura / PrusaSlicer / Bambu
   Studio and it'll already be the right physical size. STL and STEP
