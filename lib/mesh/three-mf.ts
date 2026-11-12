@@ -3,17 +3,20 @@
 // live in Metadata/model_settings.config, which Bambu Studio and Orca
 // read; basematerials carries the same colors for everything else.
 //
-// Bambu Studio only reads model_settings.config from a file that says it
-// was written by Bambu Studio (its reader tests the Application metadata
-// for a "BambuStudio-" prefix, bbs_3mf.cpp). Anything else is loaded as
-// bare geometry and every part lands on filament 1. So the file carries
-// that mark, as Orca's files do.
+// Bambu Studio sorts a 3MF by its Application metadata: a value starting
+// "BambuStudio-" makes it a Bambu file (bbs_3mf.cpp, _handle_end_metadata),
+// anything else a third-party one. A third-party file is loaded as
+// geometry, and where Studio can read colors from it, it drops the file's
+// own filament numbers in favor of its color import (Plater.cpp,
+// load_files). A Bambu file keeps the numbers in model_settings.config.
+// So the file carries that mark.
 //
-// There is no project_settings.config on purpose. With one, Studio takes
-// the file for a full project and replaces the user's printer, process
-// and filament presets with whatever the file holds, filling every
-// setting the file lacks with a bare default. Without one it keeps the
-// user's presets and loads the parts with their filament numbers.
+// There is no project_settings.config on purpose. In a marked file Studio
+// would load it as the project's settings, over bare defaults for every
+// key the file lacks, in place of the user's presets. Without one it
+// loads geometry and filament numbers and leaves the presets alone. The
+// cost: opened as a project, Studio does not add filaments to its list,
+// so the user needs as many there as the model has colors.
 //
 // A 3MF is a zip, so a small writer lives here rather than a dependency.
 

@@ -34,7 +34,7 @@ used made-up terrain, so they could not have caught it.
 ## A file format is not checked until its reader has opened it
 
 2026-11-11. The 3MF carried filament numbers in the right place, but
-Bambu Studio ignored them because the file did not claim to be a Bambu
+Bambu Studio did not use them: the file did not claim to be a Bambu
 file. Unit tests only checked that the numbers were written.
 
 - "Written correctly" is a claim about the writer. Whether a slicer uses
@@ -42,5 +42,8 @@ file. Unit tests only checked that the numbers were written.
   in it before calling the export done.
 - Bambu Studio's reader is `src/libslic3r/Format/bbs_3mf.cpp`, and the
   load decisions are in `Plater.cpp` (`load_files`). Check there first.
-- Don't ship a partial `project_settings.config`. Studio fills what is
-  missing with bare defaults and swaps the user's presets for them.
+- Don't ship a partial `project_settings.config` in a file marked as
+  Bambu's. Studio loads it over bare defaults as the project's settings.
+- Say which reader version the source was read at. Studio's load logic
+  has changed between releases, and the first explanation written for
+  this bug described a guard that the current source does not have.

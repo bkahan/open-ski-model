@@ -118,14 +118,17 @@ no visible text. Replacing both:
 - First slicer test (Bambu Studio, 2026-11-11): the bodies loaded as one
   multi-part object, but Studio said the file was not a Bambu 3MF, loaded
   geometry only, and every part had to be given its filament by hand.
-  Studio's reader ignores `model_settings.config` unless the model's
-  Application metadata starts with `BambuStudio-`. The export now carries
-  that mark. It no longer writes a `project_settings.config`: a partial
-  one would make Studio replace the user's printer and filament presets
-  with defaults. Not yet re-tested in Studio.
+  Studio treats a file as its own only when the model's Application
+  metadata starts with `BambuStudio-`, and it does not keep a third-party
+  file's filament numbers. The export now carries that mark. It no longer
+  writes a `project_settings.config`: in a marked file a partial one
+  would be loaded as the project's settings over bare defaults. Not yet
+  re-tested in Studio.
 - Still open for the 3MF: filament colors and types do not travel with
-  the file (that needs a full project config, built from a project saved
-  by Studio), and Studio still shows a "geometry only" notice on load.
+  the file, Studio shows a "geometry only" notice when the file is opened
+  as a project, and it does not add filaments to its list on that path,
+  so the list needs as many as the model has colors. All three need a
+  full project config, built from a project saved by Studio.
 - One AMS: white, three trail colors, black lifts and text. Second AMS:
   every color separate, gray lifts, forest below 60% of the relief.
 - The Stacked finish (flat elevation steps with grooved runs) was removed:
