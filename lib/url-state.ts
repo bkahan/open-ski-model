@@ -7,6 +7,7 @@
 //   /?b=-122.97,50.10,-122.91,50.14&s=8x6&t=0.25&rh=2&label=Whistler
 
 import { isColorSchemeSetting, type ColorSchemeSetting } from "@/lib/resort/colors";
+import { clampScaleDenominator } from "@/lib/print-fit";
 import { PLACE_MAX_CHARS } from "@/lib/resort/place";
 import { DEFAULT_RESORT_SETTINGS } from "@/lib/resort/settings";
 import type { Shape } from "@/lib/shape";
@@ -23,6 +24,8 @@ export interface UrlState {
   baseThicknessInches: number;
   reliefInches: number;
   aspectLocked: boolean;
+  /** The N of 1 : N when the scale is set and the print size follows; null when the size is set. */
+  scaleDenominator: number | null;
   gridSize: number;
   engraveLabel: boolean;
   engraveBrand: boolean;
@@ -46,6 +49,7 @@ export function encodeUrlState(s: UrlState): URLSearchParams {
   if (s.areaId) params.set("ra", s.areaId);
   if (s.rotation !== 0) params.set("r", trim(s.rotation));
   if (s.aspectLocked) params.set("lk", "1");
+  if (s.scaleDenominator !== null) params.set("sc", String(Math.round(s.scaleDenominator)));
   if (s.gridSize !== 256) params.set("g", String(Math.round(s.gridSize)));
   if (s.engraveLabel) params.set("el", "1");
   // Default-on toggle: persist "0" only when disabled.
@@ -91,6 +95,8 @@ export function decodeUrlState(params: URLSearchParams): Partial<UrlState> {
   const r = params.get("r");
   if (r && Number.isFinite(Number(r))) out.rotation = Number(r);
   if (params.get("lk") === "1") out.aspectLocked = true;
+  const sc = params.get("sc");
+  if (sc && Number.isFinite(Number(sc)) && Number(sc) > 0) out.scaleDenominator = clampScaleDenominator(Number(sc));
   const g = params.get("g");
   if (g && Number.isFinite(Number(g))) out.gridSize = Math.round(Number(g));
   const el = params.get("el");

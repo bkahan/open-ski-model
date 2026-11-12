@@ -6,12 +6,13 @@
 import { useEffect, useState } from "react";
 
 import { loadManifold } from "@/lib/mesh/manifold";
-import { outlineOnMap, traceResortOutline, type OutlineSpec } from "@/lib/mesh/resort-outline";
+import { outlineOnMap, outlineShare, traceResortOutline, type OutlineSpec } from "@/lib/mesh/resort-outline";
 import type { LngLat } from "@/lib/types";
 
 interface Traced {
   spec: OutlineSpec;
   ring: LngLat[] | null;
+  share: number | null;
 }
 
 export interface ResortOutline {
@@ -22,6 +23,8 @@ export interface ResortOutline {
    * when there was nothing to trace.
    */
   ring: LngLat[] | null;
+  /** The outline's longest side as a share of its frame's side; null whenever `ring` is. */
+  share: number | null;
   /** False from a change of `spec` until its own trace is back. */
   settled: boolean;
 }
@@ -40,19 +43,23 @@ export function useResortOutline(spec: OutlineSpec | null): ResortOutline {
       .then((m) => {
         if (cancelled) return;
         const ring = traceResortOutline(m, spec);
-        setTraced({ spec, ring: ring ? outlineOnMap(spec, ring) : null });
+        setTraced({
+          spec,
+          ring: ring ? outlineOnMap(spec, ring) : null,
+          share: ring ? outlineShare(spec, ring) : null,
+        });
       })
       .catch((err: unknown) => {
         console.error("[outline] trace failed", err);
-        if (!cancelled) setTraced({ spec, ring: null });
+        if (!cancelled) setTraced({ spec, ring: null, share: null });
       });
     return () => {
       cancelled = true;
     };
   }, [spec]);
 
-  if (!spec) return { ring: null, settled: true };
-  if (traced?.spec === spec) return { ring: traced.ring, settled: true };
-  const sameArea = traced !== null && traced.spec.areaId === spec.areaId;
-  return { ring: sameArea ? traced.ring : null, settled: false };
+  if (!spec) return { ring: null, share: null, settled: true };
+  if (traced?.spec === spec) return { ring: traced.ring, share: traced.share, settled: true };
+  const last = traced !== null && traced.spec.areaId === spec.areaId ? traced : null;
+  return { ring: last?.ring ?? null, share: last?.share ?? null, settled: false };
 }

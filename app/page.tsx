@@ -18,6 +18,11 @@
 //     ski area's own outline, and the frame behind it (the terrain that
 //     gets sampled) is fitted to the resort's lines and never shown, so
 //     it cannot be dragged or sized to cut the resort off.
+//   - `size` and `bbox` are a layout: what ground is covered and in what
+//     proportions. `sizing` says whether the size or the scale is the
+//     thing set, and `frame` (printFrame) is what the model is built at.
+//     Frame edits all work on the layout; only what is generated, drawn
+//     as an outline or read out uses `frame`.
 //   - URL search params mirror this state so a deep link reopens the
 //     same view.
 
@@ -50,7 +55,7 @@ import {
   DEFAULT_RESORT_SETTINGS,
   type ResortSettings,
 } from "@/lib/resort/settings";
-import type { OutlineSpec } from "@/lib/mesh/resort-outline";
+import { ESTIMATED_OUTLINE_SHARE, type OutlineSpec } from "@/lib/mesh/resort-outline";
 import type { ResortData, ResortRequest } from "@/lib/resort/types";
 import {
   HEX_FLAT_TO_LONG,
@@ -61,11 +66,17 @@ import {
 import { frameAroundResort, OUTLINE_FRAME_PADDING } from "@/lib/resort/frame";
 import { lookupPlace, placeFromIndex, placeLine, resortBasePoint } from "@/lib/resort/place";
 import {
+  clampScaleDenominator,
   DEFAULT_RELIEF_INCHES,
   exaggerationForRelief,
   fitDragToPrint,
+  MAX_PRINT_INCHES,
+  printFrame,
+  reliefForRescaledPrint,
   reliefForResizedPrint,
+  scaleDenominator,
   scaleForResizedPrint,
+  type Sizing,
 } from "@/lib/print-fit";
 import type { Bbox, LngLat, SearchResult } from "@/lib/types";
 import { decodeUrlState, syncUrl } from "@/lib/url-state";
@@ -120,6 +131,17 @@ const RESORT_FRAME_MIN_RUNS = 3;
 const RESORT_FETCH_DEBOUNCE_MS = 700;
 /** Mirrors the server cap in /api/resort. */
 const RESORT_MAX_FETCH_DEG = 1;
+
+/**
+ * The side the map's outline is traced at. The outline is built in
+ * proportion to its frame, so on the ground it is the same ring at any
+ * print size, give or take tolerances far finer than a map shows. Tracing
+ * at one size means a size or scale change never retraces it.
+ */
+const OUTLINE_TRACE_INCHES = 6;
+
+/** A scale read off a set size is rounded to this before it becomes the scale that is set. */
+const SCALE_ROUNDING = 100;
 
 const RESORT_LINES_FAILED =
   "Couldn't load this resort's runs, so it is shown as a plain frame. Choose Resort to try again.";
@@ -214,6 +236,7 @@ export default function Home() {
     reliefInches: DEFAULT_RELIEF_INCHES,
     aspectLocked: true,
   });
+  const [sizing, setSizing] = useState<Sizing>({ mode: "size" });
   const [shape, setShape] = useState<Shape>("rectangle");
   const [silhouette, setSilhouette] = useState(false);
   const [areaId, setAreaId] = useState<string | null>(null);
@@ -280,6 +303,11 @@ export default function Home() {
       reliefInches: parsed.reliefInches ?? DEFAULT_RELIEF_INCHES,
       aspectLocked: locked,
     });
+    setSizing(
+      typeof parsed.scaleDenominator === "number"
+        ? { mode: "scale", denominator: parsed.scaleDenominator }
+        : { mode: "size" },
+    );
     const nextGridSize = parsed.gridSize !== undefined
       ? Math.max(MIN_GRID_SIZE, Math.min(MAX_GRID_SIZE, parsed.gridSize))
       : DEFAULT_GRID_SIZE;
@@ -317,6 +345,7 @@ export default function Home() {
         baseThicknessInches: size.baseThicknessInches,
         reliefInches: size.reliefInches,
         aspectLocked: size.aspectLocked,
+        scaleDenominator: sizing.mode === "scale" ? sizing.denominator : null,
         gridSize,
         engraveLabel,
         engraveBrand,
@@ -326,7 +355,7 @@ export default function Home() {
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [bbox, shape, silhouette, areaId, rotation, size, gridSize, engraveLabel, engraveBrand, resortSettings, label, place]);
+  }, [bbox, shape, silhouette, areaId, rotation, size, sizing, gridSize, engraveLabel, engraveBrand, resortSettings, label, place]);
 
   /** Fetch runs + lifts for `area`, replacing any in-flight request. */
   const loadResort = useCallback(async (area: Bbox): Promise<ResortData | null> => {
@@ -397,17 +426,31 @@ export default function Home() {
     return {
       bbox,
       shape: "rectangle",
-      widthInches: size.widthInches,
-      heightInches: size.heightInches,
+      widthInches: OUTLINE_TRACE_INCHES,
+      heightInches: OUTLINE_TRACE_INCHES,
       rotation,
       resort,
       areaId,
       gridColumns: gridSize,
     };
-  }, [silhouette, resortFitting, bbox, areaId, resort, size.widthInches, size.heightInches, rotation, gridSize]);
+  }, [silhouette, resortFitting, bbox, areaId, resort, rotation, gridSize]);
   const outline = useResortOutline(outlineSpec);
   /** The Resort shape has nothing to generate from until an outline has been traced. */
   const resortPending = silhouette && (outlineSpec === null || (!outline.settled && outline.ring === null));
+
+  // What the model is built at. The panel's size is the mountain's for a
+  // resort, so its frame is that much bigger; at a set scale the size
+  // follows from the ground covered.
+  const frame = useMemo(() => {
+    if (!bbox) return null;
+    return printFrame({
+      size: { widthInches: size.widthInches, heightInches: size.heightInches },
+      metersPerInch: scaleMPerIn(bbox, shape, size.widthInches, size.heightInches, rotation),
+      sizing,
+      outlineShare: silhouette ? (outline.share ?? ESTIMATED_OUTLINE_SHARE) : null,
+    });
+  }, [bbox, shape, size.widthInches, size.heightInches, rotation, sizing, silhouette, outline.share]);
+  const frameTooBig = frame !== null && Math.max(frame.widthInches, frame.heightInches) > MAX_PRINT_INCHES;
 
   const resolvedScheme = useMemo(
     () => resolveColorScheme(resortSettings.colorScheme, bbox ?? [0, 0, 0, 0], resort?.convention ?? null),
@@ -431,11 +474,11 @@ export default function Home() {
     // The panel's print size can run ahead of the model on screen until
     // the next Regenerate, so the height is read at the model's own size.
     return exaggerationForRelief(
-      reliefForResizedPrint(size, snapshot, size.reliefInches),
+      reliefForResizedPrint(frame ?? snapshot, snapshot, size.reliefInches),
       snapshot.data.max - snapshot.data.min,
       1 / metersPerInch,
     );
-  }, [snapshot, size]);
+  }, [snapshot, frame, size.reliefInches]);
 
   // Memo "starting AABB aspect" so search snapping can use it.
   const aabbAspect = useMemo(() => {
@@ -771,8 +814,33 @@ export default function Home() {
     });
   };
 
+  /**
+   * Switching what is set changes nothing on the print: the scale starts
+   * from the one the size had led to, and the size from the scale's.
+   */
+  const handleSizingModeChange = (mode: Sizing["mode"]) => {
+    if (mode === sizing.mode || !frame) return;
+    if (mode === "scale") {
+      const current = scaleDenominator(frame.metersPerInch);
+      setSizing({ mode: "scale", denominator: clampScaleDenominator(Math.round(current / SCALE_ROUNDING) * SCALE_ROUNDING) });
+      return;
+    }
+    setSizing({ mode: "size" });
+    setSize((s) => ({ ...s, widthInches: frame.stated.widthInches, heightInches: frame.stated.heightInches }));
+  };
+
+  /** A new scale for the same ground: the print resizes, and the model height with it. */
+  const handleScaleChange = (denominator: number) => {
+    const next = clampScaleDenominator(denominator);
+    if (sizing.mode === "scale") {
+      const previous = sizing.denominator;
+      setSize((s) => ({ ...s, reliefInches: reliefForRescaledPrint(s.reliefInches, previous, next) }));
+    }
+    setSizing({ mode: "scale", denominator: next });
+  };
+
   const handleGenerate = async () => {
-    if (!bbox) return;
+    if (!bbox || !frame) return;
     setError(null);
     setView("loading");
     try {
@@ -802,8 +870,8 @@ export default function Home() {
         bbox,
         shape,
         rotation,
-        widthInches: size.widthInches,
-        heightInches: size.heightInches,
+        widthInches: frame.widthInches,
+        heightInches: frame.heightInches,
         data,
         label,
       });
@@ -848,6 +916,10 @@ export default function Home() {
           resortMode={silhouette}
           rotation={rotation}
           onChange={handleSizeChange}
+          sizing={sizing}
+          onSizingModeChange={handleSizingModeChange}
+          onScaleChange={handleScaleChange}
+          frame={frame}
           bbox={bbox}
           exaggeration={view === "viewer" ? exaggeration : null}
           onShapeWidthMetersChange={handleShapeWidthMetersChange}
@@ -897,10 +969,10 @@ export default function Home() {
           <button
             type="button"
             onClick={handleGenerate}
-            disabled={!bbox || resortPending}
+            disabled={!bbox || resortPending || frameTooBig}
             className="w-full rounded-md bg-amber-400 text-slate-950 font-semibold py-2.5 text-sm hover:bg-amber-300 disabled:opacity-50 disabled:cursor-not-allowed transition"
           >
-            {resortPending ? "Loading resort\u2026" : "Generate 3D model"}
+            {resortPending ? "Loading resort\u2026" : frameTooBig ? "Too large to build" : "Generate 3D model"}
           </button>
         )}
 

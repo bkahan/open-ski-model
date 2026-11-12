@@ -35,6 +35,29 @@ export function traceResortOutline(m: ManifoldToplevel, spec: OutlineSpec): Cont
   );
 }
 
+/**
+ * A rough outlineShare for before a resort has been traced: lines that
+ * fill a frame padded 12%, plus the outline's 3% margin on each side.
+ */
+export const ESTIMATED_OUTLINE_SHARE = 0.95;
+
+/**
+ * The outline's longest side, measured square to its frame, as a share of
+ * the frame's side. The outline is built in proportion to the frame, so
+ * the share holds at any print size and turns "the mountain is 6 in" into
+ * the frame to build.
+ */
+export function outlineShare(spec: FrameSpec, ring: Contour): number {
+  // The frame's own edges give its axes, whichever way it is turned.
+  const [origin, alongWidth, , alongHeight] = shapeOutline("rectangle", 1, 1, spec.rotation);
+  const axes = [alongWidth, alongHeight].map(([x, z]) => [x - origin[0], z - origin[1]]);
+  const spans = axes.map(([ax, az]) => {
+    const along = ring.map(([x, z]) => x * ax + z * az);
+    return Math.max(...along) - Math.min(...along);
+  });
+  return Math.max(...spans) / Math.max(spec.widthInches, spec.heightInches);
+}
+
 /** A traced ring as map coordinates. */
 export function outlineOnMap(spec: FrameSpec, ring: Contour): LngLat[] {
   return planePointsOnMap(spec, ring);

@@ -87,6 +87,27 @@ no visible text. Replacing both:
   keeps the ground.
 - Model height is set in inches (0.75" default, scaling with the print).
   Exaggeration follows from each resort's relief, 0.5–8×.
+- Two ways to size (`lib/print-fit.ts`, `printFrame`):
+  - Set size: as above. For the Resort shape the size is the mountain's
+    longest side, measured square to its frame, and the hidden frame is
+    built that much bigger (the outline is about 95% of its frame). The
+    name tab is extra.
+  - Set scale: 1 : N is typed or picked (10k to 50k presets, 1,000 to
+    500,000 allowed) and the print comes out however big the covered
+    ground is at it. The panel reads the size back in inches and mm, and
+    says when it is past a 256 mm bed. Nothing over 100 in is built.
+    Changing N keeps the vertical exaggeration by scaling the model
+    height with it, within the slider's range.
+- The panel's size and the frame on the map stay a "layout" that every
+  frame edit works on; only what is generated and read out goes through
+  `printFrame`. Switching between the two ways changes nothing on the
+  print.
+- The map's outline is traced at one nominal size. On the ground it is
+  the same ring at any print size (its share of the frame varied 0.950
+  to 0.952 from 3 to 40 in on Jay Peak), so a size or scale change does
+  not retrace it.
+- Open: prints bigger than the bed have no tiling yet, and there is no
+  printer profile (bed, nozzle) to check against.
 
 ### Resort silhouette (done)
 
@@ -112,8 +133,7 @@ no visible text. Replacing both:
 - Rectangle, Circle and Hex are plain shapes: a frame to drag, never cut
   to a resort.
 - Open: untagged runs that start outside the resort (Sugarloaf's far
-  east glades) are left out of the outline. Print size is still the
-  hidden frame's side, so the resort prints a little smaller than stated.
+  east glades) are left out of the outline.
 - With the name on, a 4 mm slab follows the outline with a flat tab on
   the base side carrying the name and rose; the brand goes under the tab.
 

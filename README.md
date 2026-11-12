@@ -205,8 +205,9 @@ are fused in by position dedup so the export stays a single solid.
 | `b`     | bbox: `west,south,east,north`                          |
 | `sh`    | `rectangle` \| `circle` \| `hexagon`                   |
 | `r`     | rotation in degrees (omitted when 0)                   |
-| `s`     | print canvas size: `WxH` in inches                     |
+| `s`     | print size: `WxH` in inches (the mountain's longest side for the Resort shape) |
 | `lk`    | `1` if aspect is locked (omitted otherwise)            |
+| `sc`    | set scale: the N of 1 : N. The print size then follows from the ground covered, and `s` only keeps its proportions |
 | `g`     | grid size (omitted at the default 256)                 |
 | `el`    | `1` to engrave the plinth label + compass              |
 | `eb`    | `0` to disable the bottom brand engraving (on by default) |

@@ -8,7 +8,7 @@ import { shapeAABBHalf, shapeOutline } from "@/lib/shape";
 import type { LngLat } from "@/lib/types";
 
 import { gapBetween } from "./printable";
-import { outlineOnMap, traceResortOutline, type OutlineSpec } from "./resort-outline";
+import { ESTIMATED_OUTLINE_SHARE, outlineOnMap, outlineShare, traceResortOutline, type OutlineSpec } from "./resort-outline";
 import { planePointsOnMap, resortLinesOnPlane } from "./runs";
 import type { Contour } from "./text";
 
@@ -223,5 +223,48 @@ describe("outlineOnMap", () => {
       expect(back[i][0]).toBeCloseTo(lng, 9);
       expect(back[i][1]).toBeCloseTo(lat, 9);
     });
+  });
+});
+
+describe("outlineShare", () => {
+  const square: Contour = [
+    [-2, -1],
+    [2, -1],
+    [2, 1],
+    [-2, 1],
+  ];
+  const frame = (rotation: number) => ({ ...fittedSpec(resortOf(jayRuns), rotation), widthInches: 8, heightInches: 8 });
+
+  it("is the ring's longest side over the frame's", () => {
+    expect(outlineShare(frame(0), square)).toBeCloseTo(4 / 8, 9);
+  });
+
+  it("measures square to a turned frame, not north-up", () => {
+    // A 4 by 2 box lying along a frame turned 30 degrees is still 4 long.
+    const a = (30 * Math.PI) / 180;
+    const [origin, alongWidth] = shapeOutline("rectangle", 1, 1, 30);
+    const ux = alongWidth[0] - origin[0];
+    const uz = alongWidth[1] - origin[1];
+    expect(Math.hypot(ux, uz)).toBeCloseTo(1, 9);
+    expect(Math.abs(Math.cos(a) * ux) + Math.abs(Math.sin(a) * uz)).toBeGreaterThan(0.99);
+    const turned = square.map(([x, z]): [number, number] => [x * ux - z * uz, x * uz + z * ux]);
+    expect(outlineShare(frame(30), turned)).toBeCloseTo(4 / 8, 9);
+    // North-up, the same ring's corners reach further than its length.
+    expect(outlineShare(frame(0), turned)).toBeCloseTo((4 * Math.cos(a) + 2 * Math.sin(a)) / 8, 9);
+  });
+
+  it("holds at any print size, since the outline is built in proportion to its frame", () => {
+    const at = (inches: number) => {
+      const spec = { ...fittedSpec(resortOf(jayRuns), 30), widthInches: inches, heightInches: inches };
+      const ring = traceResortOutline(m, spec);
+      expect(ring).not.toBeNull();
+      return ring ? outlineShare(spec, ring) : 0;
+    };
+    const small = at(4);
+    expect(at(6)).toBeCloseTo(small, 2);
+    expect(at(18)).toBeCloseTo(small, 2);
+    // A fitted resort's outline fills most of its frame; the estimate used
+    // before the first trace is in the right place.
+    expect(Math.abs(small - ESTIMATED_OUTLINE_SHARE)).toBeLessThan(0.06);
   });
 });
