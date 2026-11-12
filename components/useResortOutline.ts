@@ -15,14 +15,19 @@ interface Traced {
 }
 
 export interface ResortOutline {
-  /** The ring on the map; null while tracing, or when there was nothing to trace. */
+  /**
+   * The ring on the map. While a new spec for the same ski area is being
+   * traced (a size or density change) this is still the last one, so the
+   * outline doesn't blink. Null before the first trace of an area, and
+   * when there was nothing to trace.
+   */
   ring: LngLat[] | null;
-  /** False from a change of `spec` until its trace is back. */
+  /** False from a change of `spec` until its own trace is back. */
   settled: boolean;
 }
 
 /**
- * The outline for `spec`, or nothing for null. A trace only counts for the
+ * The outline for `spec`, or nothing for null. A trace is matched to the
  * exact spec it was made from, so pass a memoized one.
  */
 export function useResortOutline(spec: OutlineSpec | null): ResortOutline {
@@ -46,6 +51,8 @@ export function useResortOutline(spec: OutlineSpec | null): ResortOutline {
     };
   }, [spec]);
 
-  const current = spec && traced?.spec === spec ? traced : null;
-  return { ring: current?.ring ?? null, settled: !spec || current !== null };
+  if (!spec) return { ring: null, settled: true };
+  if (traced?.spec === spec) return { ring: traced.ring, settled: true };
+  const sameArea = traced !== null && traced.spec.areaId === spec.areaId;
+  return { ring: sameArea ? traced.ring : null, settled: false };
 }

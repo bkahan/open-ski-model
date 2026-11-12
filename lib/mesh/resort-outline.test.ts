@@ -24,20 +24,23 @@ const AREA = "jay";
 const SIDE_IN = 6;
 const GRID = 256;
 
-const run = (coords: LngLat[], areas: string[] = [AREA]): SkiRun => ({
+/** A run with no ski-area tag at all, as many real ones are mapped. */
+const untaggedRun = (coords: LngLat[]): SkiRun => ({
   id: coords.map(String).join("|"),
   difficulty: "easy",
   convention: "north_america",
   coords,
   isArea: false,
-  areas,
 });
 
-/** A run with no ski-area tag at all, as many real ones are mapped. */
-const untaggedRun = (coords: LngLat[]): SkiRun => {
-  const { areas: _tagged, ...rest } = run(coords);
-  return rest;
-};
+const run = (coords: LngLat[], areas: string[] = [AREA]): SkiRun => ({ ...untaggedRun(coords), areas });
+
+/** Where one run falls on a spec's plane, whatever it is tagged. */
+function onPlaneOf(spec: OutlineSpec, line: SkiRun): Array<[number, number]> {
+  const [points] = resortLinesOnPlane({ ...spec, areaId: null, resort: resortOf([line]) });
+  expect(points).toHaveLength(line.coords.length);
+  return points;
+}
 
 const resortOf = (runs: SkiRun[]): ResortData => ({
   runs,
@@ -91,7 +94,9 @@ describe("traceResortOutline", () => {
     expect(ring).not.toBeNull();
     if (!ring) return;
 
-    for (const line of resortLinesOnPlane(spec)) {
+    const lines = resortLinesOnPlane(spec);
+    expect(lines).toHaveLength(jayRuns.length);
+    for (const line of lines) {
       for (const point of line) expect(contains(ring, point)).toBe(true);
     }
 
@@ -127,9 +132,8 @@ describe("traceResortOutline", () => {
     const ring = traceResortOutline(m, spec);
     expect(ring).not.toBeNull();
     if (!ring) return;
-    const onPlane = (line: SkiRun) => resortLinesOnPlane({ ...spec, areaId: null, resort: resortOf([line]) })[0];
-    for (const point of onPlane(glade)) expect(contains(ring, point)).toBe(true);
-    expect(onPlane(neighbor).some((point) => contains(ring, point))).toBe(false);
+    for (const point of onPlaneOf(spec, glade)) expect(contains(ring, point)).toBe(true);
+    expect(onPlaneOf(spec, neighbor).some((point) => contains(ring, point))).toBe(false);
   });
 
   it("takes in an untagged run that leaves the resort, and still clears the frame", () => {
@@ -140,8 +144,7 @@ describe("traceResortOutline", () => {
     const ring = traceResortOutline(m, spec);
     expect(ring).not.toBeNull();
     if (!ring) return;
-    const [onPlane] = resortLinesOnPlane({ ...spec, areaId: null, resort: resortOf([sidecountry]) });
-    for (const point of onPlane) expect(contains(ring, point)).toBe(true);
+    for (const point of onPlaneOf(spec, sidecountry)) expect(contains(ring, point)).toBe(true);
     const cell = SIDE_IN / (GRID - 1);
     const edge: Contour = shapeOutline("rectangle", SIDE_IN - 2 * cell, SIDE_IN - 2 * cell, 0);
     expect(gapBetween([ring], [edge])).toBeGreaterThan(0.05);
@@ -171,13 +174,24 @@ describe("traceResortOutline", () => {
     const ring = traceResortOutline(m, spec);
     expect(ring).not.toBeNull();
     if (!ring) return;
-    const [onPlane] = resortLinesOnPlane({ ...spec, areaId: null, resort: resortOf([elsewhere]) });
-    expect(onPlane.some((point) => contains(ring, point))).toBe(false);
+    expect(onPlaneOf(spec, elsewhere).some((point) => contains(ring, point))).toBe(false);
   });
 
   it("has nothing to trace without lines", () => {
     const spec = { ...fittedSpec(resortOf(jayRuns), 0), resort: resortOf([]) };
     expect(traceResortOutline(m, spec)).toBeNull();
+  });
+});
+
+describe("a frame fitted at the coarsest grid", () => {
+  it("still clears the outline, though the cell held back from the edge is four times wider", () => {
+    const spec = { ...fittedSpec(resortOf(jayRuns), 30), gridColumns: 64 };
+    const ring = traceResortOutline(m, spec);
+    expect(ring).not.toBeNull();
+    if (!ring) return;
+    const cell = (shapeAABBHalf("rectangle", SIDE_IN, SIDE_IN, 30)[0] * 2) / 63;
+    const edge: Contour = shapeOutline("rectangle", SIDE_IN - 2 * cell, SIDE_IN - 2 * cell, 30);
+    expect(gapBetween([ring], [edge])).toBeGreaterThan(0.01);
   });
 });
 
@@ -203,8 +217,8 @@ describe("outlineOnMap", () => {
 
   it("undoes the mapping onto the plane", () => {
     const spec = fittedSpec(resortOf(jayRuns), 88);
-    const [onPlane] = resortLinesOnPlane(spec);
-    const back = planePointsOnMap(spec, onPlane);
+    const back = planePointsOnMap(spec, onPlaneOf(spec, jayRuns[0]));
+    expect(back).toHaveLength(jayRuns[0].coords.length);
     jayRuns[0].coords.forEach(([lng, lat], i) => {
       expect(back[i][0]).toBeCloseTo(lng, 9);
       expect(back[i][1]).toBeCloseTo(lat, 9);

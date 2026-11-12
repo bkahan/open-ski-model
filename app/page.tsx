@@ -121,6 +121,9 @@ const RESORT_FETCH_DEBOUNCE_MS = 700;
 /** Mirrors the server cap in /api/resort. */
 const RESORT_MAX_FETCH_DEG = 1;
 
+const RESORT_LINES_FAILED =
+  "Couldn't load this resort's runs, so it is shown as a plain frame. Choose Resort to try again.";
+
 type View = "map" | "loading" | "viewer";
 
 /** The resort the Resort shape is about, kept so the shape can be gone back to. */
@@ -234,7 +237,13 @@ export default function Home() {
   const [resortError, setResortError] = useState<string | null>(null);
   const resortAbortRef = useRef<AbortController | null>(null);
   const didHydrateFromUrl = useRef(false);
-  const startFromDefaultRef = useRef(false);
+  /** What the first render has to pick once handlers exist: the default resort, or a link's. */
+  const startRef = useRef<ResortPick | "default" | null>(null);
+  // Latest value for loadResort, which is created once.
+  const silhouetteRef = useRef(silhouette);
+  useEffect(() => {
+    silhouetteRef.current = silhouette;
+  });
 
   // --- Hydrate from URL on mount ---
   useEffect(() => {
@@ -254,15 +263,14 @@ export default function Home() {
     else if (sh === "hexagon") h = w * HEX_FLAT_TO_LONG;
     else if (locked) h = w;
 
-    // The Resort shape is an outline of one ski area: a link without the
-    // area, or without the frame it was fitted to, opens as a plain shape.
-    const resortLink =
-      sh === "rectangle" && parsed.silhouette && parsed.areaId && parsed.bbox
-        ? { id: parsed.areaId, bbox: parsed.bbox, rotation: rot }
-        : null;
+    // A link that names its ski area can always go (back) to the Resort
+    // shape. The shape is an outline of one area, so a link asking for it
+    // without naming one opens as a plain frame.
+    const linkPick = parsed.areaId && parsed.bbox ? { id: parsed.areaId, bbox: parsed.bbox, rotation: rot } : null;
+    const resortShape = sh === "rectangle" && (parsed.silhouette ?? false) && linkPick !== null;
     setShape(sh);
-    setSilhouette(resortLink !== null);
-    setResortPick(resortLink);
+    setSilhouette(resortShape);
+    setResortPick(linkPick);
     setAreaId(parsed.areaId ?? null);
     setRotation(rot);
     setSize({
@@ -288,8 +296,10 @@ export default function Home() {
     setPlace(parsed.place ?? "");
     setBbox(parsed.bbox ?? null);
     setFlyTo(parsed.bbox ? bboxCenter(parsed.bbox) : null);
-    // A first visit has no frame in the link to restore.
-    startFromDefaultRef.current = !parsed.bbox;
+    // A first visit has no frame to restore and opens on the default
+    // resort. A Resort link's frame is not trusted either: it may have
+    // been dragged or sized before frames were fitted, so it is refitted.
+    startRef.current = !parsed.bbox ? "default" : resortShape ? linkPick : null;
   }, []);
 
   // --- Mirror state to URL whenever it stabilizes ---
@@ -334,6 +344,11 @@ export default function Home() {
       if (ctrl.signal.aborted) return null;
       console.error("[resort]", err);
       setResortError(err instanceof Error ? err.message : "resort lookup failed");
+      if (silhouetteRef.current) {
+        // No lines, no outline: don't leave the Resort shape waiting on them.
+        setSilhouette(false);
+        setError(RESORT_LINES_FAILED);
+      }
       return null;
     } finally {
       if (resortAbortRef.current === ctrl) setResortLoading(false);
@@ -391,8 +406,8 @@ export default function Home() {
     };
   }, [silhouette, resortFitting, bbox, areaId, resort, size.widthInches, size.heightInches, rotation, gridSize]);
   const outline = useResortOutline(outlineSpec);
-  /** The Resort shape has nothing to generate from until its outline is traced. */
-  const resortPending = silhouette && (outlineSpec === null || !outline.settled);
+  /** The Resort shape has nothing to generate from until an outline has been traced. */
+  const resortPending = silhouette && (outlineSpec === null || (!outline.settled && outline.ring === null));
 
   const resolvedScheme = useMemo(
     () => resolveColorScheme(resortSettings.colorScheme, bbox ?? [0, 0, 0, 0], resort?.convention ?? null),
@@ -500,7 +515,7 @@ export default function Home() {
         if (resortFitRef.current !== fit) return;
         setResortFitting(false);
         setSilhouette(false);
-        setError("Couldn't load this resort's runs, so it is shown as a plain frame. Choose Resort to try again.");
+        setError(RESORT_LINES_FAILED);
       });
   };
 
@@ -559,15 +574,17 @@ export default function Home() {
     }
   };
 
-  // A first visit opens on the default resort, picked as a search would.
-  const handleSearchRef = useRef(handleSearch);
+  // What the link asked the first render for (see the hydrate effect): the
+  // default resort, picked as a search would, or the link's own, refitted.
+  const startHandlersRef = useRef({ handleSearch, frameResort });
   useEffect(() => {
-    handleSearchRef.current = handleSearch;
+    startHandlersRef.current = { handleSearch, frameResort };
   });
   useEffect(() => {
-    if (!startFromDefaultRef.current) return;
-    startFromDefaultRef.current = false;
-    handleSearchRef.current(DEFAULT_RESORT);
+    const start = startRef.current;
+    startRef.current = null;
+    if (start === "default") startHandlersRef.current.handleSearch(DEFAULT_RESORT);
+    else if (start) startHandlersRef.current.frameResort(start, fetchResort(resortFetchArea(start.bbox)));
   }, []);
 
   /** "Box width (km)" — sets the SHAPE's real-world width. */
@@ -712,9 +729,13 @@ export default function Home() {
     setBbox(bboxForShape(center, newShape, newW, newH, newRot, scale));
   };
 
-  /** Back to the picked resort's outline, refitted in case the frame was moved off it. */
+  /**
+   * To the picked resort's outline, refitted: the frame may have been
+   * moved off it in another shape, and a click while already on Resort is
+   * the way to retry lines that failed to load.
+   */
   const handleSilhouette = () => {
-    if (!resortPick || silhouette) return;
+    if (!resortPick) return;
     frameResort(resortPick, fetchResort(resortFetchArea(resortPick.bbox)));
   };
 
@@ -947,6 +968,7 @@ export default function Home() {
             colorScheme={resolvedScheme}
             showLifts={resortSettings.showLifts}
             outline={silhouette ? outline.ring : null}
+            outlineId={silhouette ? areaId : null}
             frameHidden={silhouette}
           />
         )}
