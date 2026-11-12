@@ -13,6 +13,7 @@ const base: UrlState = {
   baseThicknessInches: 0.25,
   reliefInches: 1.25,
   aspectLocked: true,
+  scaleDenominator: null,
   gridSize: 256,
   engraveLabel: false,
   engraveBrand: true,
@@ -98,5 +99,24 @@ describe("resort url state", () => {
     const decoded = decodeUrlState(new URLSearchParams("mw=abc&cs=mars&mw=-1"));
     expect(decoded.minRunWidthMm).toBeUndefined();
     expect(decoded.colorScheme).toBeUndefined();
+  });
+});
+
+describe("sizing url state", () => {
+  it("leaves the scale out when the size is set", () => {
+    expect(encodeUrlState(base).has("sc")).toBe(false);
+    expect(decodeUrlState(encodeUrlState(base)).scaleDenominator).toBeUndefined();
+  });
+
+  it("round-trips a set scale", () => {
+    const params = encodeUrlState({ ...base, scaleDenominator: 25_000 });
+    expect(params.get("sc")).toBe("25000");
+    expect(decodeUrlState(params).scaleDenominator).toBe(25_000);
+  });
+
+  it("holds a scale from a link within range and ignores one that isn't a number", () => {
+    expect(decodeUrlState(new URLSearchParams("sc=3")).scaleDenominator).toBe(1_000);
+    expect(decodeUrlState(new URLSearchParams("sc=abc")).scaleDenominator).toBeUndefined();
+    expect(decodeUrlState(new URLSearchParams("sc=-5")).scaleDenominator).toBeUndefined();
   });
 });
