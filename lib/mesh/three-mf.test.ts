@@ -44,8 +44,22 @@ describe("buildThreeMf", () => {
       "_rels/.rels",
       "3D/3dmodel.model",
       "Metadata/model_settings.config",
-      "Metadata/project_settings.config",
     ]);
+  });
+
+  it("marks the file the way Bambu Studio needs before it will read the filament numbers", async () => {
+    const model = (await unzip(await buildThreeMf("T", [tetra(1, "White")], filaments))).get("3D/3dmodel.model")!;
+    // Studio's reader tests for this prefix and parses what follows as a version.
+    expect(model).toMatch(/<metadata name="Application">BambuStudio-\d{2}\.\d{2}\.\d{2}\.\d{2}<\/metadata>/);
+    expect(model).toContain('<metadata name="BambuStudio:3mfVersion">1</metadata>');
+    expect(model).toContain('xmlns:BambuStudio="http://schemas.bambulab.com/package/2021"');
+    // Metadata comes before the resources it describes.
+    expect(model.indexOf('name="Application"')).toBeLessThan(model.indexOf("<resources>"));
+  });
+
+  it("leaves the user's printer and filament presets alone", async () => {
+    const files = await unzip(await buildThreeMf("T", [tetra(1, "White"), tetra(2, "Black & Co")], filaments));
+    expect(files.has("Metadata/project_settings.config")).toBe(false);
   });
 
   it("makes one assembly and escapes names", async () => {
@@ -70,7 +84,6 @@ describe("buildThreeMf", () => {
     expect(settings).toContain('<object id="4">');
     expect(settings).toContain('<part id="3" subtype="normal_part">');
     expect(settings).toContain('<metadata key="extruder" value="2"/>');
-    expect(JSON.parse(files.get("Metadata/project_settings.config")!).filament_colour).toEqual(["#FFFFFF", "#111827"]);
   });
 
   it("honors the vertex stride", async () => {
