@@ -115,6 +115,17 @@ no visible text. Replacing both:
   color beside them, and color stops 0.8 mm short of the model's edge.
 - Export 3MF writes one body per filament as one assembly, with filament
   numbers in `Metadata/model_settings.config` for Bambu Studio and Orca.
+- First slicer test (Bambu Studio, 2026-11-11): the bodies loaded as one
+  multi-part object, but Studio said the file was not a Bambu 3MF, loaded
+  geometry only, and every part had to be given its filament by hand.
+  Studio's reader ignores `model_settings.config` unless the model's
+  Application metadata starts with `BambuStudio-`. The export now carries
+  that mark. It no longer writes a `project_settings.config`: a partial
+  one would make Studio replace the user's printer and filament presets
+  with defaults. Not yet re-tested in Studio.
+- Still open for the 3MF: filament colors and types do not travel with
+  the file (that needs a full project config, built from a project saved
+  by Studio), and Studio still shows a "geometry only" notice on load.
 - One AMS: white, three trail colors, black lifts and text. Second AMS:
   every color separate, gray lifts, forest below 60% of the relief.
 - The Stacked finish (flat elevation steps with grooved runs) was removed:

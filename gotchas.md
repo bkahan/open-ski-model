@@ -30,3 +30,17 @@ used made-up terrain, so they could not have caught it.
   service. Say which parts were only checked that way.
 - When a request and its reply should cover the same ground, assert it:
   compare the extent that came back with the extent that was asked for.
+
+## A file format is not checked until its reader has opened it
+
+2026-11-11. The 3MF carried filament numbers in the right place, but
+Bambu Studio ignored them because the file did not claim to be a Bambu
+file. Unit tests only checked that the numbers were written.
+
+- "Written correctly" is a claim about the writer. Whether a slicer uses
+  the data is a claim about the reader: read its source or open the file
+  in it before calling the export done.
+- Bambu Studio's reader is `src/libslic3r/Format/bbs_3mf.cpp`, and the
+  load decisions are in `Plater.cpp` (`load_files`). Check there first.
+- Don't ship a partial `project_settings.config`. Studio fills what is
+  missing with bare defaults and swaps the user's presets for them.
