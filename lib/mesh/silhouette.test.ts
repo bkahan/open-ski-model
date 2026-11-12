@@ -230,7 +230,10 @@ describe("buildModelSolids with an outline", () => {
   it("starts the cut mountain at the plinth's top, whatever lies lower outside the ring", () => {
     // The ring keeps the hill's middle; the frame's corners are far lower.
     const inside = outlineMask(outline, base.widthInches, base.heightInches, size, size);
-    const floorElevation = lowestKeptElevation(data, base.widthInches, base.heightInches, inside);
+    const floorElevation = lowestKeptElevation(data, base.widthInches, base.heightInches, {
+      inShape: () => true,
+      inCut: inside,
+    });
     expect(floorElevation).toBeGreaterThan(data.min + 20);
     const { vertexData, inPerMeter } = buildWatertight({
       ...base,

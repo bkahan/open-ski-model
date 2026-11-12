@@ -39,6 +39,7 @@ describe("model height url state", () => {
     expect(params.get("pl")).toBe("0.1");
     expect(decodeUrlState(params).plinthLiftInches).toBe(0.1);
     expect(decodeUrlState(new URLSearchParams("pl=-1")).plinthLiftInches).toBeUndefined();
+    expect(decodeUrlState(new URLSearchParams("pl=50")).plinthLiftInches).toBe(2);
   });
 
   it("ignores the retired stacked-finish setting in an old link", () => {

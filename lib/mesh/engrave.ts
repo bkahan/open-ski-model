@@ -62,7 +62,9 @@ export interface TerrainBase {
  * above the plinth's top.
  */
 export function terrainBaseInches(base: TerrainBase): number {
-  return base.plinth ? TERRAIN_SEAT_IN + Math.max(0, base.plinthLiftInches) : base.baseThicknessInches;
+  if (!base.plinth) return base.baseThicknessInches;
+  const lift = Number.isFinite(base.plinthLiftInches) ? Math.max(0, base.plinthLiftInches) : 0;
+  return TERRAIN_SEAT_IN + lift;
 }
 
 export interface ModelSpec extends PlateSide {
@@ -133,7 +135,8 @@ export function buildModelSolids(
       release(terrain);
       terrain = cut;
     }
-    const recess = spec.plinth ? own(seatRecess(terrain, terrainLift)) : null;
+    const recess = spec.plinth ? seatRecess(terrain, terrainLift) : null;
+    if (recess) own(recess);
 
     let colorInlays: ColorInlay[] = [];
     if (spec.inlays) {
@@ -211,18 +214,24 @@ export function buildModelSolids(
 /**
  * The part of the plinth to clear from under the terrain: the terrain's
  * own footprint drawn in a little, from just under the plinth's top up.
+ * Null for a footprint too narrow to draw in.
  */
-function seatRecess(terrain: Manifold, terrainLift: number): Manifold {
+function seatRecess(terrain: Manifold, terrainLift: number): Manifold | null {
   // Below the seat's top the terrain is all wall, so a slice there is its footprint.
   const stood = terrain.rotate([90, 0, 0]);
   const slice = stood.slice(TERRAIN_SEAT_IN / 2);
   const footprint = slice.scale([1, -1]);
   const inset = footprint.offset(-SEAT_RECESS_INSET_IN, "Miter", 4);
-  const prism = prismFromSection(inset, SEAT_RECESS_DEPTH_IN + SEAT_CUTTER_RISE_IN);
   try {
-    return prism.translate([0, terrainLift + TERRAIN_SEAT_IN - SEAT_RECESS_DEPTH_IN, 0]);
+    if (inset.isEmpty()) return null;
+    const prism = prismFromSection(inset, SEAT_RECESS_DEPTH_IN + SEAT_CUTTER_RISE_IN);
+    try {
+      return prism.translate([0, terrainLift + TERRAIN_SEAT_IN - SEAT_RECESS_DEPTH_IN, 0]);
+    } finally {
+      prism.delete();
+    }
   } finally {
-    for (const s of [stood, slice, footprint, inset, prism]) s.delete();
+    for (const s of [stood, slice, footprint, inset]) s.delete();
   }
 }
 

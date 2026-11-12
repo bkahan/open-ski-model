@@ -467,29 +467,45 @@ export function buildShapedWatertight(
   };
 }
 
+export interface KeptGround {
+  /** The shape's mask: a cell is built only when all four corners pass. */
+  inShape: (x: number, z: number) => boolean;
+  /** A cut made through the built cells afterwards, such as a resort's outline. */
+  inCut?: (x: number, z: number) => boolean;
+}
+
 /**
- * The lowest elevation the finished model can show: the minimum over every
- * grid cell with a corner that `kept` accepts. A cut through such a cell
- * exposes ground between its corners, never below the lowest of them.
+ * The lowest elevation the finished model shows: the minimum over every
+ * built cell, or with a cut, over every built cell that has a corner
+ * inside it. A cut through such a cell exposes ground between its
+ * corners, never below the lowest of them. A cut that crosses a cell
+ * without taking in a corner can leave lower ground, which the mesh
+ * builders hold level at the base.
  */
 export function lowestKeptElevation(
   data: ElevationResponse,
   gridWidthInches: number,
   gridHeightInches: number,
-  kept: (x: number, z: number) => boolean,
+  kept: KeptGround,
 ): number {
   const { heights, width: gw, height: gh } = data;
   const xAt = (i: number) => -gridWidthInches / 2 + (i * gridWidthInches) / (gw - 1);
   const zAt = (j: number) => gridHeightInches / 2 - (j * gridHeightInches) / (gh - 1);
-  const inside = new Uint8Array(gw * gh);
-  for (let j = 0; j < gh; j++) {
-    for (let i = 0; i < gw; i++) inside[j * gw + i] = kept(xAt(i), zAt(j)) ? 1 : 0;
-  }
+  const mask = (inside: (x: number, z: number) => boolean) => {
+    const cells = new Uint8Array(gw * gh);
+    for (let j = 0; j < gh; j++) {
+      for (let i = 0; i < gw; i++) cells[j * gw + i] = inside(xAt(i), zAt(j)) ? 1 : 0;
+    }
+    return cells;
+  };
+  const shape = mask(kept.inShape);
+  const cut = kept.inCut ? mask(kept.inCut) : null;
   let lowest = Infinity;
   for (let j = 0; j < gh - 1; j++) {
     for (let i = 0; i < gw - 1; i++) {
       const corners = [j * gw + i, j * gw + i + 1, (j + 1) * gw + i, (j + 1) * gw + i + 1];
-      if (!corners.some((k) => inside[k] === 1)) continue;
+      if (!corners.every((k) => shape[k] === 1)) continue;
+      if (cut && !corners.some((k) => cut[k] === 1)) continue;
       for (const k of corners) lowest = Math.min(lowest, heights[k]);
     }
   }

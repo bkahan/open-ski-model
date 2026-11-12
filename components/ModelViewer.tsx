@@ -272,13 +272,10 @@ export default function ModelViewer({
   const floorElevation = useMemo(() => {
     if (!insideOutline && shape === "rectangle" && rotation === 0) return data.min;
     const [halfW, halfH] = shapeAABBHalf(shape, widthInches, heightInches, rotation);
-    return lowestKeptElevation(
-      data,
-      halfW * 2,
-      halfH * 2,
-      (x, z) =>
-        pointInShape(shape, x, z, widthInches, heightInches, rotation) && (insideOutline?.(x, z) ?? true),
-    );
+    return lowestKeptElevation(data, halfW * 2, halfH * 2, {
+      inShape: (x, z) => pointInShape(shape, x, z, widthInches, heightInches, rotation),
+      inCut: insideOutline,
+    });
   }, [data, shape, widthInches, heightInches, rotation, insideOutline]);
 
   // The runs and lifts are set into the terrain as color bodies, the same

@@ -41,18 +41,28 @@ describe("floor elevation", () => {
 describe("lowestKeptElevation", () => {
   const data = ramp(5);
   // Columns sit at x = -2, -1, 0, 1, 2.
+  const everywhere = () => true;
 
   it("is the grid's lowest point when everything is kept", () => {
-    expect(lowestKeptElevation(data, 4, 4, () => true)).toBe(500);
+    expect(lowestKeptElevation(data, 4, 4, { inShape: everywhere })).toBe(500);
   });
 
-  it("counts every corner of a cell the cut passes through", () => {
-    // Only the two east columns are inside, so the cut runs through the
+  it("counts only cells a shape builds: all four corners inside", () => {
+    // x > -0.5 takes in the columns at 0, 1 and 2, so the cells between -1 and 0 are not built.
+    expect(lowestKeptElevation(data, 4, 4, { inShape: (x) => x > -0.5 })).toBe(700);
+  });
+
+  it("counts every corner of a cell a cut passes through", () => {
+    // Only the two east columns are inside the cut, which runs through the
     // cells between x = 0 and x = 1 and can expose ground down to x = 0.
-    expect(lowestKeptElevation(data, 4, 4, (x) => x > 0.5)).toBe(700);
+    expect(lowestKeptElevation(data, 4, 4, { inShape: everywhere, inCut: (x) => x > 0.5 })).toBe(700);
+  });
+
+  it("leaves out cells the shape does not build, even inside the cut", () => {
+    expect(lowestKeptElevation(data, 4, 4, { inShape: (x) => x > 0.5, inCut: everywhere })).toBe(800);
   });
 
   it("falls back to the grid's lowest point when nothing is kept", () => {
-    expect(lowestKeptElevation(data, 4, 4, () => false)).toBe(500);
+    expect(lowestKeptElevation(data, 4, 4, { inShape: () => false })).toBe(500);
   });
 });

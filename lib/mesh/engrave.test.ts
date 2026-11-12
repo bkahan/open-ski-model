@@ -6,7 +6,7 @@ import * as opentype from "opentype.js";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import type { ElevationResponse } from "@/lib/elevation/types";
-import type { Shape } from "@/lib/shape";
+import { pointInShape, shapeAABBHalf, type Shape } from "@/lib/shape";
 import type { Bbox } from "@/lib/types";
 
 import { compassRoseContours } from "./compass";
@@ -23,7 +23,7 @@ import {
 } from "./nameplate";
 import { buildPlinthSolid, plinthHeightInches, RIM_IN, TERRAIN_SEAT_IN } from "./plinth";
 import { MIN_CAPITALS_CAP_IN, MIN_TEXT_CAP_IN } from "./printable";
-import { buildShapedWatertight, buildWatertight } from "./watertight";
+import { buildShapedWatertight, buildWatertight, lowestKeptElevation } from "./watertight";
 
 type Toplevel = Awaited<ReturnType<typeof Module>>;
 let m: Toplevel;
@@ -482,6 +482,72 @@ describe("buildModelSolids", () => {
       expect(lifted.boundingBox().min[1]).toBeCloseTo(plinthHeightInches() - TERRAIN_SEAT_IN, 6);
       expect(union.status()).toBe("NoError");
       expect(union.decompose().map((s) => { const v = s.volume(); s.delete(); return v; })).toHaveLength(1);
+    });
+  });
+
+  it.each<[Shape, number]>([
+    ["circle", 0],
+    ["hexagon", 0],
+    ["rectangle", 30],
+  ])("starts a %s turned %s° at the plinth's top exactly", (shape, rotation) => {
+    const data = hill(40);
+    const side = { ...base, heightInches: shape === "hexagon" ? 6 * 0.866 : 6, rotation };
+    const [halfW, halfH] = shapeAABBHalf(shape, side.widthInches, side.heightInches, rotation);
+    const floorElevation = lowestKeptElevation(data, halfW * 2, halfH * 2, {
+      inShape: (x, z) => pointInShape(shape, x, z, side.widthInches, side.heightInches, rotation),
+    });
+    const { vertexData } = buildShapedWatertight(
+      {
+        ...side,
+        bbox,
+        data,
+        baseThicknessInches: terrainBaseInches({ plinth: true, plinthLiftInches: 0, baseThicknessInches: 0.25 }),
+        verticalExaggeration: 2,
+        floorElevation,
+      },
+      shape,
+      rotation,
+    );
+    const built = buildModelSolids(
+      m,
+      font,
+      { positions: vertexData.positions!, indices: vertexData.indices! },
+      { shape, ...side, label: "Jay Peak", plinth: true, brand: true },
+    );
+    const union = unionForExport(m, built);
+    withSolids([built.terrain, built.plinth!, ...built.inlays, union], () => {
+      const mesh = built.terrain.getMesh();
+      let lowestSurface = Infinity;
+      for (let v = 0; v < mesh.numVert; v++) {
+        const y = mesh.vertProperties[v * mesh.numProp + 1];
+        if (y > 1e-6) lowestSurface = Math.min(lowestSurface, y);
+      }
+      expect(lowestSurface + built.terrainLift).toBeCloseTo(plinthHeightInches(), 6);
+      expect(union.status()).toBe("NoError");
+      expect(union.decompose().map((s) => { const v = s.volume(); s.delete(); return v; })).toHaveLength(1);
+    });
+  });
+
+  it("builds on the seat alone when the height above the plate is not a usable number", () => {
+    const on = { plinth: true, baseThicknessInches: 0.25 };
+    expect(terrainBaseInches({ ...on, plinthLiftInches: -1 })).toBe(TERRAIN_SEAT_IN);
+    expect(terrainBaseInches({ ...on, plinthLiftInches: NaN })).toBe(TERRAIN_SEAT_IN);
+    expect(terrainBaseInches({ ...on, plinthLiftInches: 0.1 })).toBeCloseTo(TERRAIN_SEAT_IN + 0.1, 9);
+    expect(terrainBaseInches({ ...on, plinth: false, plinthLiftInches: 0.1 })).toBe(0.25);
+  });
+
+  it("leaves the plinth whole under a sliver too narrow to seat", () => {
+    const { vertexData } = buildWatertight({ ...base, bbox, data: hill(40), baseThicknessInches: TERRAIN_SEAT_IN, verticalExaggeration: 2 });
+    const sliver: [number, number][] = [[-1, -0.004], [1, -0.004], [1, 0.004], [-1, 0.004]];
+    const built = buildModelSolids(
+      m,
+      font,
+      { positions: vertexData.positions!, indices: vertexData.indices! },
+      { shape: "rectangle", ...base, label: "Jay Peak", plinth: true, brand: false, outline: sliver },
+    );
+    withSolids([built.terrain, built.plinth!, ...built.inlays], () => {
+      expect(built.plinth!.status()).toBe("NoError");
+      expect(built.plinth!.volume()).toBeGreaterThan(0);
     });
   });
 

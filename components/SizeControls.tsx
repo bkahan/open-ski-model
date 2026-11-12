@@ -18,6 +18,7 @@
 
 import { bboxWidthMeters } from "@/lib/bbox";
 import {
+  MAX_PLINTH_LIFT_INCHES,
   MAX_PRINT_INCHES,
   MAX_RELIEF_INCHES,
   MAX_SCALE_DENOMINATOR,
@@ -255,9 +256,9 @@ export default function SizeControls({
             label="Height above name plate (in)"
             value={size.plinthLiftInches}
             min={0}
-            max={2}
+            max={MAX_PLINTH_LIFT_INCHES}
             step={0.05}
-            onChange={(v) => onChange({ ...size, plinthLiftInches: v })}
+            onChange={(v) => onChange({ ...size, plinthLiftInches: Math.min(MAX_PLINTH_LIFT_INCHES, Math.max(0, v)) })}
           />
         ) : (
           <LabeledNumber
