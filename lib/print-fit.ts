@@ -22,7 +22,7 @@ const METERS_PER_INCH = 0.0254;
 /** How the print's size is decided. `denominator` is the N of 1 : N. */
 export type Sizing = { mode: "size" } | { mode: "scale"; denominator: number };
 
-export const SCALE_PRESETS = [10_000, 15_000, 20_000, 25_000, 30_000, 40_000, 50_000];
+export const SCALE_PRESETS: readonly number[] = [10_000, 15_000, 20_000, 25_000, 30_000, 40_000, 50_000];
 export const MIN_SCALE_DENOMINATOR = 1_000;
 export const MAX_SCALE_DENOMINATOR = 500_000;
 /**
@@ -37,8 +37,20 @@ export function clampScaleDenominator(denominator: number): number {
   return Math.min(MAX_SCALE_DENOMINATOR, Math.max(MIN_SCALE_DENOMINATOR, Math.round(denominator)));
 }
 
+/**
+ * The N a person typed for 1 : N, clamped to the range: "25,000",
+ * "25 000", "1:25000" and "25k" all read as 25000. Null for anything
+ * that isn't a scale.
+ */
+export function parseScaleDenominator(text: string): number | null {
+  const match = /^(?:1:)?(\d+(?:\.\d+)?)(k?)$/i.exec(text.replace(/[,\s]/g, ""));
+  if (!match) return null;
+  const typed = Number(match[1]) * (match[2] ? 1000 : 1);
+  return typed > 0 ? clampScaleDenominator(typed) : null;
+}
+
 /** The N of 1 : N for a map scale in meters of ground per inch of print. */
-export function scaleDenominator(metersPerInch: number): number {
+export function denominatorForMetersPerInch(metersPerInch: number): number {
   return metersPerInch / METERS_PER_INCH;
 }
 
@@ -95,6 +107,11 @@ function longestSide(size: PrintSize): number {
   return Math.max(size.widthInches, size.heightInches);
 }
 
+/** Over MAX_PRINT_INCHES, or not a size at all: nothing to build either way. */
+export function tooLargeToBuild(frame: PrintSize): boolean {
+  return !(longestSide(frame) <= MAX_PRINT_INCHES);
+}
+
 /**
  * A frame drag reports the new shape in inches at the current map scale.
  * Convert that to the same ground area at the existing print size: the
@@ -141,10 +158,11 @@ export function reliefForResizedPrint(
 /**
  * Model height after the set scale changes from 1 : `previous` to
  * 1 : `next`: it grows and shrinks with the print, so the vertical
- * exaggeration stays what it was, within what the slider can hold.
+ * exaggeration stays what it was. Not held to the slider's range, as a
+ * resized print's isn't: a scale tried and put back returns the height.
  */
 export function reliefForRescaledPrint(reliefInches: number, previous: number, next: number): number {
-  return Math.min(MAX_RELIEF_INCHES, Math.max(MIN_RELIEF_INCHES, (reliefInches * previous) / next));
+  return (reliefInches * previous) / next;
 }
 
 /** Exaggeration that makes the terrain's relief print at `reliefInches`. */

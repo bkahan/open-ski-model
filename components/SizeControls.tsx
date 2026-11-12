@@ -24,7 +24,9 @@ import {
   MIN_RELIEF_INCHES,
   MIN_SCALE_DENOMINATOR,
   SCALE_PRESETS,
-  scaleDenominator as denominatorFor,
+  denominatorForMetersPerInch,
+  parseScaleDenominator,
+  tooLargeToBuild,
   type PrintFrame,
   type Sizing,
 } from "@/lib/print-fit";
@@ -101,8 +103,9 @@ export default function SizeControls({
   const shapeWidthKm = (size.widthInches * metersPerInch) / 1000;
   const shapeHeightKm = (size.heightInches * metersPerInch) / 1000;
   // The model's own scale: the frame it is built in, not the panel's size.
-  const scaleDenominator = frame ? Math.round(denominatorFor(frame.metersPerInch)) : 0;
+  const scaleDenominator = frame ? Math.round(denominatorForMetersPerInch(frame.metersPerInch)) : 0;
   const scaleSet = sizing.mode === "scale";
+  const tooBig = frame !== null && tooLargeToBuild(frame);
 
   const isCircleOrHex = shape === "circle" || shape === "hexagon";
   // For circle/hex, the user sees a single Diameter. Internally we update
@@ -133,8 +136,9 @@ export default function SizeControls({
               type="button"
               onClick={() => onSizingModeChange(mode)}
               aria-pressed={sizing.mode === mode}
+              disabled={frame === null}
               className={
-                "rounded-md border py-1.5 text-xs transition " +
+                "rounded-md border py-1.5 text-xs transition disabled:cursor-not-allowed disabled:opacity-50 " +
                 (sizing.mode === mode
                   ? "border-amber-400 bg-amber-400/10 text-amber-200"
                   : "border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200")
@@ -151,6 +155,7 @@ export default function SizeControls({
             onChange={onScaleChange}
             frame={frame}
             resortMode={resortMode}
+            tooBig={tooBig}
           />
         ) : resortMode ? (
           <>
@@ -223,6 +228,20 @@ export default function SizeControls({
               <span>Lock width = height</span>
             </label>
           </>
+        )}
+
+        {tooBig && (
+          <p className="text-xs text-red-300" role="alert">
+            {scaleSet ? (
+              <>
+                Too large to build: over {MAX_PRINT_INCHES} in. Use a scale between 1 :{" "}
+                {formatDenominator(MIN_SCALE_DENOMINATOR)} and 1 : {formatDenominator(MAX_SCALE_DENOMINATOR)} with a
+                bigger second number, or cover less ground.
+              </>
+            ) : (
+              <>Too large to build: over {MAX_PRINT_INCHES} in{resortMode ? " with the frame around the mountain" : ""}. Set a smaller size.</>
+            )}
+          </p>
         )}
 
         <LabeledNumber
@@ -298,7 +317,7 @@ export default function SizeControls({
           {bbox && !scaleSet && (
             <>
               scale &asymp;{" "}
-              <span className="font-mono">1 : {scaleDenominator.toLocaleString()}</span>
+              <span className="font-mono">1 : {formatDenominator(scaleDenominator)}</span>
             </>
           )}
         </div>
@@ -311,26 +330,34 @@ function inchesAndMm(inches: number): string {
   return `${inches.toFixed(1)} in (${Math.round(inches * MM_PER_INCH)} mm)`;
 }
 
+/** Always with commas: the scale field reads back what this writes. */
+function formatDenominator(denominator: number): string {
+  return denominator.toLocaleString("en-US");
+}
+
 /** The scale field with its presets, and the size the print comes out at. */
 function ScaleSetting({
   denominator,
   onChange,
   frame,
   resortMode,
+  tooBig,
 }: {
   denominator: number;
   onChange: (denominator: number) => void;
   frame: PrintFrame | null;
   resortMode: boolean;
+  tooBig: boolean;
 }) {
   // Uncontrolled, committed on blur or Enter: a scale typed digit by digit
-  // passes through values that would each resize the print.
-  const commit = (raw: string) => {
-    const typed = Number(raw.replace(/[,\s]/g, ""));
-    if (Number.isFinite(typed) && typed > 0 && typed !== denominator) onChange(typed);
+  // passes through values that would each resize the print. The field is
+  // rewritten with what was understood, so it never shows a rejected entry.
+  const commit = (field: HTMLInputElement) => {
+    const understood = parseScaleDenominator(field.value) ?? denominator;
+    field.value = formatDenominator(understood);
+    if (understood !== denominator) onChange(understood);
   };
   const longest = frame ? Math.max(frame.stated.widthInches, frame.stated.heightInches) : 0;
-  const tooBig = frame !== null && Math.max(frame.widthInches, frame.heightInches) > MAX_PRINT_INCHES;
   return (
     <div className="space-y-2">
       <label className="block">
@@ -341,9 +368,9 @@ function ScaleSetting({
             key={denominator}
             type="text"
             inputMode="numeric"
-            defaultValue={denominator.toLocaleString()}
+            defaultValue={formatDenominator(denominator)}
             aria-label="Scale: one to"
-            onBlur={(e) => commit(e.target.value)}
+            onBlur={(e) => commit(e.currentTarget)}
             onKeyDown={(e) => {
               if (e.key === "Enter") e.currentTarget.blur();
             }}
@@ -388,12 +415,6 @@ function ScaleSetting({
             </>
           )}
           {longest * MM_PER_INCH > BED_MM && !tooBig && <> Larger than a {BED_MM} mm bed.</>}
-        </p>
-      )}
-      {tooBig && (
-        <p className="text-xs text-red-300">
-          Too large to build: over {MAX_PRINT_INCHES} in. Use a scale between 1 : {MIN_SCALE_DENOMINATOR.toLocaleString()} and 1 :{" "}
-          {MAX_SCALE_DENOMINATOR.toLocaleString()} with a bigger second number, or cover less ground.
         </p>
       )}
     </div>

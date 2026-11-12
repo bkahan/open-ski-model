@@ -253,12 +253,17 @@ describe("outlineShare", () => {
     expect(outlineShare(frame(0), turned)).toBeCloseTo((4 * Math.cos(a) + 2 * Math.sin(a)) / 8, 9);
   });
 
+  it("has no share to give for a ring with no extent", () => {
+    expect(outlineShare(frame(0), [])).toBeNull();
+    expect(outlineShare(frame(0), [[1, 1]])).toBeNull();
+  });
+
   it("holds at any print size, since the outline is built in proportion to its frame", () => {
     const at = (inches: number) => {
       const spec = { ...fittedSpec(resortOf(jayRuns), 30), widthInches: inches, heightInches: inches };
       const ring = traceResortOutline(m, spec);
       expect(ring).not.toBeNull();
-      return ring ? outlineShare(spec, ring) : 0;
+      return (ring && outlineShare(spec, ring)) ?? 0;
     };
     const small = at(4);
     expect(at(6)).toBeCloseTo(small, 2);

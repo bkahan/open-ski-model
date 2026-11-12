@@ -97,17 +97,22 @@ no visible text. Replacing both:
     ground is at it. The panel reads the size back in inches and mm, and
     says when it is past a 256 mm bed. Nothing over 100 in is built.
     Changing N keeps the vertical exaggeration by scaling the model
-    height with it, within the slider's range.
+    height with it. The field takes "25,000", "1:25000" and "25k".
 - The panel's size and the frame on the map stay a "layout" that every
   frame edit works on; only what is generated and read out goes through
-  `printFrame`. Switching between the two ways changes nothing on the
-  print.
+  `printFrame`. Switching between the two ways keeps the print as it is
+  (to the nearest whole N), unless the size's scale is outside 1,000 to
+  500,000, in which case it moves to the nearest end.
 - The map's outline is traced at one nominal size. On the ground it is
   the same ring at any print size (its share of the frame varied 0.950
   to 0.952 from 3 to 40 in on Jay Peak), so a size or scale change does
   not retrace it.
+- Generate waits for the outline's trace whenever the frame it is
+  traced in has changed, since the frame to build is sized off it.
 - Open: prints bigger than the bed have no tiling yet, and there is no
-  printer profile (bed, nozzle) to check against.
+  printer profile (bed, nozzle) to check against. The model height
+  slider still stops at 4 in, which a print past about 30 in outgrows
+  (the height is kept, but the slider can't show or set it).
 
 ### Resort silhouette (done)
 

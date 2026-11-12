@@ -70,11 +70,11 @@ import {
   DEFAULT_RELIEF_INCHES,
   exaggerationForRelief,
   fitDragToPrint,
-  MAX_PRINT_INCHES,
   printFrame,
   reliefForRescaledPrint,
   reliefForResizedPrint,
-  scaleDenominator,
+  denominatorForMetersPerInch,
+  tooLargeToBuild,
   scaleForResizedPrint,
   type Sizing,
 } from "@/lib/print-fit";
@@ -139,9 +139,6 @@ const RESORT_MAX_FETCH_DEG = 1;
  * at one size means a size or scale change never retraces it.
  */
 const OUTLINE_TRACE_INCHES = 6;
-
-/** A scale read off a set size is rounded to this before it becomes the scale that is set. */
-const SCALE_ROUNDING = 100;
 
 const RESORT_LINES_FAILED =
   "Couldn't load this resort's runs, so it is shown as a plain frame. Choose Resort to try again.";
@@ -435,8 +432,16 @@ export default function Home() {
     };
   }, [silhouette, resortFitting, bbox, areaId, resort, rotation, gridSize]);
   const outline = useResortOutline(outlineSpec);
-  /** The Resort shape has nothing to generate from until an outline has been traced. */
-  const resortPending = silhouette && (outlineSpec === null || (!outline.settled && outline.ring === null));
+  /**
+   * The Resort shape has nothing to generate from until its outline is
+   * traced: the frame to build is sized off that trace, so one still out
+   * for a turned or re-gridded frame holds Generate too.
+   */
+  const resortPending = silhouette && (outlineSpec === null || !outline.settled);
+  // A resort with nothing to trace is built as its plain frame, so the
+  // size set is the frame's. Until a trace is back the usual share stands in.
+  const nothingToTrace = outlineSpec !== null && outline.settled && outline.ring === null;
+  const mountainShare = !silhouette || nothingToTrace ? null : (outline.share ?? ESTIMATED_OUTLINE_SHARE);
 
   // What the model is built at. The panel's size is the mountain's for a
   // resort, so its frame is that much bigger; at a set scale the size
@@ -447,10 +452,10 @@ export default function Home() {
       size: { widthInches: size.widthInches, heightInches: size.heightInches },
       metersPerInch: scaleMPerIn(bbox, shape, size.widthInches, size.heightInches, rotation),
       sizing,
-      outlineShare: silhouette ? (outline.share ?? ESTIMATED_OUTLINE_SHARE) : null,
+      outlineShare: mountainShare,
     });
-  }, [bbox, shape, size.widthInches, size.heightInches, rotation, sizing, silhouette, outline.share]);
-  const frameTooBig = frame !== null && Math.max(frame.widthInches, frame.heightInches) > MAX_PRINT_INCHES;
+  }, [bbox, shape, size.widthInches, size.heightInches, rotation, sizing, mountainShare]);
+  const frameTooBig = frame !== null && tooLargeToBuild(frame);
 
   const resolvedScheme = useMemo(
     () => resolveColorScheme(resortSettings.colorScheme, bbox ?? [0, 0, 0, 0], resort?.convention ?? null),
@@ -815,14 +820,18 @@ export default function Home() {
   };
 
   /**
-   * Switching what is set changes nothing on the print: the scale starts
-   * from the one the size had led to, and the size from the scale's.
+   * Switching what is set keeps the print as it is: the size starts from
+   * the scale's, and the scale from the one the size had led to. Only a
+   * size whose scale is outside what can be set moves, to the nearest
+   * scale that can, and the model height goes with it.
    */
   const handleSizingModeChange = (mode: Sizing["mode"]) => {
     if (mode === sizing.mode || !frame) return;
     if (mode === "scale") {
-      const current = scaleDenominator(frame.metersPerInch);
-      setSizing({ mode: "scale", denominator: clampScaleDenominator(Math.round(current / SCALE_ROUNDING) * SCALE_ROUNDING) });
+      const current = denominatorForMetersPerInch(frame.metersPerInch);
+      const next = clampScaleDenominator(current);
+      setSizing({ mode: "scale", denominator: next });
+      setSize((s) => ({ ...s, reliefInches: reliefForRescaledPrint(s.reliefInches, current, next) }));
       return;
     }
     setSizing({ mode: "size" });
