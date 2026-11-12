@@ -11,6 +11,7 @@ const base: UrlState = {
   widthInches: 6,
   heightInches: 6,
   baseThicknessInches: 0.25,
+  plinthLiftInches: 0,
   reliefInches: 1.25,
   aspectLocked: true,
   scaleDenominator: null,
@@ -30,6 +31,15 @@ describe("model height url state", () => {
     const params = encodeUrlState({ ...base, reliefInches: 1.75 });
     expect(params.get("rh")).toBe("1.75");
     expect(decodeUrlState(params).reliefInches).toBe(1.75);
+  });
+
+  it("round-trips the height above the name plate and omits it at zero", () => {
+    expect(encodeUrlState(base).has("pl")).toBe(false);
+    const params = encodeUrlState({ ...base, plinthLiftInches: 0.1 });
+    expect(params.get("pl")).toBe("0.1");
+    expect(decodeUrlState(params).plinthLiftInches).toBe(0.1);
+    expect(decodeUrlState(new URLSearchParams("pl=-1")).plinthLiftInches).toBeUndefined();
+    expect(decodeUrlState(new URLSearchParams("pl=50")).plinthLiftInches).toBe(2);
   });
 
   it("ignores the retired stacked-finish setting in an old link", () => {

@@ -19,7 +19,7 @@ function fakeBuilt(keys: string[]): BuiltModel {
     plinth: m.Manifold.cube([6, 0.2, 6]).translate([-3, 0, -3]),
     inlays: [m.Manifold.cube([0.1, 0.02, 0.1])],
     colorInlays: keys.map((key, i) => ({ key, solid: m.Manifold.cube([0.1, 0.02, 0.1]).translate([i, 1.5, 0]) })),
-    plinthHeight: 0.2,
+    terrainLift: 0.2,
     nameplate: null,
   };
 }

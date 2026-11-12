@@ -10,7 +10,7 @@ import type { ElevationResponse } from "@/lib/elevation/types";
 import { shapeOutline } from "@/lib/shape";
 import type { Bbox } from "@/lib/types";
 
-import { buildModelSolids } from "./engrave";
+import { buildModelSolids, terrainBaseInches } from "./engrave";
 import { INLAY_DEPTH_IN, inlayTerrain, planColors, type ColorPlan, type InlayGroup } from "./inlays";
 import { manifoldFromMesh } from "./manifold";
 import { buildWatertight } from "./watertight";
@@ -345,6 +345,41 @@ describe("buildModelSolids with inlays", () => {
     expect(built.terrain.status()).toBe("NoError");
     free([plain, built.terrain, ...built.inlays, ...built.colorInlays.map((i) => i.solid)]);
     built.plinth?.delete();
+  });
+
+  it("keeps color at full depth and out of the plinth where the ground meets the plinth's top", () => {
+    const data = hill(96);
+    const { vertexData } = buildWatertight({
+      bbox,
+      data,
+      widthInches: SIZE_IN,
+      heightInches: SIZE_IN,
+      baseThicknessInches: terrainBaseInches({ plinth: true, plinthLiftInches: 0, baseThicknessInches: BASE_IN }),
+      verticalExaggeration: 3,
+      floorElevation: Math.min(...data.heights),
+    });
+    // A run down to the hill's lowest corner, where its pocket reaches below the plinth's top.
+    const groups: InlayGroup[] = [{ key: "green", paths: [line([-2.9, -2.9], [0, 0], 1.6)] }];
+    const built = buildModelSolids(m, font, { positions: vertexData.positions!, indices: vertexData.indices! }, {
+      shape: "rectangle",
+      widthInches: SIZE_IN,
+      heightInches: SIZE_IN,
+      rotation: 0,
+      label: "Test Peak",
+      plinth: true,
+      brand: false,
+      inlays: { groups },
+    });
+    const plans = planColors(m, footprint, { groups });
+    const run = built.colorInlays[0].solid;
+    const lifted = run.translate([0, built.terrainLift, 0]);
+    const inPlinth = m.Manifold.intersection(lifted, built.plinth!);
+    const plinthTop = built.plinth!.boundingBox().max[1];
+    expect(lifted.boundingBox().min[1]).toBeLessThan(plinthTop);
+    expect(run.volume()).toBeCloseTo(plans[0].section.area() * INLAY_DEPTH_IN, 5);
+    expect(Math.abs(inPlinth.volume())).toBeLessThan(1e-9);
+    freePlans(plans);
+    free([built.terrain, built.plinth!, lifted, inPlinth, ...built.inlays, run]);
   });
 
   it("cuts the colors to a resort outline", () => {

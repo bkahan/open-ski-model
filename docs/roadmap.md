@@ -14,6 +14,8 @@ recorded here.
 | Resort shape: outline on the map, fitted frame (#9) | In `main`, not verified | Resort silhouette |
 | Size set by size or by scale 1 : N (#10) | In `main`, not verified | Print sizing |
 | Follow connected runs (#11) | In `main`, not verified | Resort silhouette |
+| Mountain starts at the plinth's top, height above it is a setting | In review, not verified | Print sizing |
+| Model height measured on the cut model, not the frame | Not started | Print sizing |
 | Color bodies and 3MF export | In `main`. Marked as a Bambu file after the first slicer test; not re-tested | Multicolor |
 | Filament colors and types that reach the slicer | Not started | Multicolor |
 | Preview colors from the filament list | Not started | Multicolor |
@@ -121,6 +123,14 @@ no visible text. Replacing both:
   keeps the ground.
 - Model height is set in inches (0.75" default, scaling with the print).
   Exaggeration follows from each resort's relief, 0.5–8×.
+- The lowest ground of the cut model sits on the plinth's top
+  (`lowestKeptElevation`, `terrainBaseInches`); "Height above name
+  plate" (`pl`) raises it. Base thickness applies only without a name
+  plate. Open: the model height and its exaggeration are still worked
+  out from the whole frame's relief, so a cut model whose lowest ground
+  is above the frame's stands shorter than the setting by that
+  difference. Not verified: no slicer or print check, and the outline
+  path was only run on stand-in terrain.
 - Two ways to size (`lib/print-fit.ts`, `printFrame`):
   - Set size: as above. For the Resort shape the size is the mountain's
     longest side, measured square to its frame, and the hidden frame is

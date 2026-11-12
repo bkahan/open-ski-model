@@ -31,8 +31,14 @@ export interface WatertightSpec {
   widthInches: number;
   /** Shape pre-rotation height in inches. */
   heightInches: number;
+  /** Height of the lowest kept point above the model's underside. */
   baseThicknessInches: number;
   verticalExaggeration: number;
+  /**
+   * Elevation in meters that sits at the base thickness. Defaults to the
+   * grid's minimum; ground below it is held level at the base.
+   */
+  floorElevation?: number;
 }
 
 export interface Palette {
@@ -71,9 +77,10 @@ export function buildWatertight(
   // Precompute every grid cell's "top y" — the absolute height of the
   // terrain surface above the model origin. Used in both top surface and
   // side walls so they line up exactly.
+  const floor = spec.floorElevation ?? min;
   const topY = new Float32Array(gw * gh);
   for (let k = 0; k < gw * gh; k++) {
-    topY[k] = base + (heights[k] - min) * inPerMeter * vx;
+    topY[k] = base + Math.max(0, heights[k] - floor) * inPerMeter * vx;
   }
 
   const positions: number[] = [];
@@ -300,9 +307,10 @@ export function buildShapedWatertight(
   const bboxWMeters = bboxWidthMeters(bbox);
   const inPerMeter = W / bboxWMeters;
 
+  const floor = spec.floorElevation ?? min;
   const topY = new Float32Array(gw * gh);
   for (let k = 0; k < gw * gh; k++) {
-    topY[k] = base + (heights[k] - min) * inPerMeter * vx;
+    topY[k] = base + Math.max(0, heights[k] - floor) * inPerMeter * vx;
   }
 
   const xAt = (i: number) => -W / 2 + (i * W) / (gw - 1);
@@ -457,6 +465,51 @@ export function buildShapedWatertight(
     inPerMeter,
     topYFn: (k) => topY[k],
   };
+}
+
+export interface KeptGround {
+  /** The shape's mask: a cell is built only when all four corners pass. */
+  inShape: (x: number, z: number) => boolean;
+  /** A cut made through the built cells afterwards, such as a resort's outline. */
+  inCut?: (x: number, z: number) => boolean;
+}
+
+/**
+ * The lowest elevation the finished model shows: the minimum over every
+ * built cell, or with a cut, over every built cell that has a corner
+ * inside it. A cut through such a cell exposes ground between its
+ * corners, never below the lowest of them. A cut that crosses a cell
+ * without taking in a corner can leave lower ground, which the mesh
+ * builders hold level at the base.
+ */
+export function lowestKeptElevation(
+  data: ElevationResponse,
+  gridWidthInches: number,
+  gridHeightInches: number,
+  kept: KeptGround,
+): number {
+  const { heights, width: gw, height: gh } = data;
+  const xAt = (i: number) => -gridWidthInches / 2 + (i * gridWidthInches) / (gw - 1);
+  const zAt = (j: number) => gridHeightInches / 2 - (j * gridHeightInches) / (gh - 1);
+  const mask = (inside: (x: number, z: number) => boolean) => {
+    const cells = new Uint8Array(gw * gh);
+    for (let j = 0; j < gh; j++) {
+      for (let i = 0; i < gw; i++) cells[j * gw + i] = inside(xAt(i), zAt(j)) ? 1 : 0;
+    }
+    return cells;
+  };
+  const shape = mask(kept.inShape);
+  const cut = kept.inCut ? mask(kept.inCut) : null;
+  let lowest = Infinity;
+  for (let j = 0; j < gh - 1; j++) {
+    for (let i = 0; i < gw - 1; i++) {
+      const corners = [j * gw + i, j * gw + i + 1, (j + 1) * gw + i, (j + 1) * gw + i + 1];
+      if (!corners.every((k) => shape[k] === 1)) continue;
+      if (cut && !corners.some((k) => cut[k] === 1)) continue;
+      for (const k of corners) lowest = Math.min(lowest, heights[k]);
+    }
+  }
+  return Number.isFinite(lowest) ? lowest : data.min;
 }
 
 // ---------- Default hypsometric palette ----------
