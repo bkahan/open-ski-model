@@ -217,6 +217,7 @@ are fused in by position dedup so the export stays a single solid.
 | `ra`    | ski area id, keeps neighbors out of the outline        |
 | `runs`  | `0` to hide ski runs (on by default)                   |
 | `lf`    | `0` to hide lifts (on by default)                      |
+| `fc`    | `1` for the Resort shape to follow untagged runs that join the ski area's (off by default) |
 | `mw`    | minimum run width in mm (omitted at the default 1.2)   |
 | `cs`    | trail color scheme `na` \| `eu` (omitted when auto)    |
 | `label` | display name (URL-encoded)                             |

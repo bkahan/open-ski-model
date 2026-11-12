@@ -31,6 +31,7 @@ export interface UrlState {
   engraveBrand: boolean;
   showRuns: boolean;
   showLifts: boolean;
+  followConnected: boolean;
   minRunWidthMm: number;
   colorScheme: ColorSchemeSetting;
   label?: string;
@@ -56,6 +57,7 @@ export function encodeUrlState(s: UrlState): URLSearchParams {
   if (!s.engraveBrand) params.set("eb", "0");
   if (!s.showRuns) params.set("runs", "0");
   if (!s.showLifts) params.set("lf", "0");
+  if (s.followConnected) params.set("fc", "1");
   if (s.minRunWidthMm !== DEFAULT_RESORT_SETTINGS.minRunWidthMm) {
     params.set("mw", trim(s.minRunWidthMm));
   }
@@ -105,6 +107,7 @@ export function decodeUrlState(params: URLSearchParams): Partial<UrlState> {
   if (eb === "0") out.engraveBrand = false;
   if (params.get("runs") === "0") out.showRuns = false;
   if (params.get("lf") === "0") out.showLifts = false;
+  if (params.get("fc") === "1") out.followConnected = true;
   const mw = params.get("mw");
   if (mw && Number.isFinite(Number(mw)) && Number(mw) > 0) out.minRunWidthMm = Number(mw);
   const cs = params.get("cs");

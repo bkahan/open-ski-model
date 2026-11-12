@@ -80,6 +80,8 @@ interface Props {
   silhouette: boolean;
   /** The ski area picked from search; its neighbors stay out of the outline. */
   areaId: string | null;
+  /** The outline also takes untagged runs that join the ski area's further out. */
+  followConnected: boolean;
   /** Set the runs (and, with showLifts, the lifts) into the terrain as color bodies. */
   showRuns: boolean;
   colorScheme: ColorScheme;
@@ -173,6 +175,7 @@ export default function ModelViewer({
   resort,
   silhouette,
   areaId,
+  followConnected,
   showRuns,
   colorScheme,
   showLifts,
@@ -203,9 +206,9 @@ export default function ModelViewer({
   const outlineInputs = useMemo(
     () =>
       silhouette && resort && shape === "rectangle"
-        ? { bbox, data, shape, widthInches, heightInches, rotation, resort, areaId }
+        ? { bbox, data, shape, widthInches, heightInches, rotation, resort, areaId, followConnected }
         : null,
-    [silhouette, resort, areaId, bbox, data, shape, widthInches, heightInches, rotation],
+    [silhouette, resort, areaId, followConnected, bbox, data, shape, widthInches, heightInches, rotation],
   );
   const [traced, setTraced] = useState<{
     inputs: NonNullable<typeof outlineInputs>;
