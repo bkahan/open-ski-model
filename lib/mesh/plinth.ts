@@ -2,7 +2,7 @@
 // footprint; the bottom is the footprint offset outward by the rim
 // width, and the 35° chamfer between them carries the name plate.
 //
-//            terrain (sits at y = plinth height)
+//            terrain (seated just below y = plinth height)
 //           ┌──────────────────────┐   ← top outline = footprint
 //          /      chamfer 35°       \
 //         └──────────────────────────┘ ← bottom outline = footprint + rim
@@ -30,6 +30,19 @@ export interface PlinthSpec {
   rotation: number;
   rimInches?: number;
 }
+
+/**
+ * The terrain's underside sits this far below the plinth's top, so ground
+ * that meets the plinth at zero height still has full-depth color in it.
+ */
+export const TERRAIN_SEAT_IN = 1 / MM_PER_INCH;
+/**
+ * The plinth is recessed under the terrain to clear the color pockets
+ * that reach below its top. Shallower and narrower than the seat, so
+ * plinth and terrain overlap around it and no two faces coincide.
+ */
+export const SEAT_RECESS_DEPTH_IN = 0.8 / MM_PER_INCH;
+export const SEAT_RECESS_INSET_IN = 0.25 / MM_PER_INCH;
 
 export function plinthHeightInches(rimInches = RIM_IN): number {
   return rimInches * Math.tan((BEVEL_DEG * Math.PI) / 180);

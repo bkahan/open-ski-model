@@ -17,6 +17,8 @@ export interface ContourSpec {
   widthInches: number;
   heightInches: number;
   baseThicknessInches: number;
+  /** Elevation that sits at the base thickness; the grid's minimum when unset. */
+  floorElevation?: number;
   inPerMeter: number;
   verticalExaggeration: number;
   /** Number of contour intervals to render. */
@@ -55,7 +57,8 @@ export function buildContourLines(spec: ContourSpec): {
   const { heights, width: gw, height: gh, min, max } = data;
 
   // Inches above the base for a given real-world elevation.
-  const elevToY = (e: number) => base + (e - min) * inPerMeter * vx + lift;
+  const floor = spec.floorElevation ?? min;
+  const elevToY = (e: number) => base + Math.max(0, e - floor) * inPerMeter * vx + lift;
   const xAt = (i: number) => -W / 2 + (i * W) / (gw - 1);
   const zAt = (j: number) => H / 2 - (j * H) / (gh - 1);
 

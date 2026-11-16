@@ -87,6 +87,14 @@ bodies, or a watertight `.stl` / `.step`.
     base area. Edit it, or clear it for one line.
   - *Brand on bottom:* `craftedcarving.com` engraved into the bottom
     face. Independent toggle.
+  - *Where the mountain starts:* with a name plate, the lowest ground the
+    model shows sits on the plinth's top, with no wall under it. "Height
+    above name plate" raises it (0 by default). Without a name plate the
+    same point sits at the base thickness. The lowest ground is taken
+    from the model as cut (resort outline, circle, hexagon), not from the
+    frame, so valleys the cut removes leave no wall behind. The terrain
+    is seated 1 mm into the plinth, which keeps run colors at full depth
+    where the ground meets it.
 
   ![Inlaid plinth label + compass and brand on bottom](docs/images/engravings.svg)
 
@@ -259,7 +267,7 @@ are fused in by position dedup so the export stays a single solid.
 ## URL state
 
 ```
-/?b=W,S,E,N&sh=shape&ol=1&ra=areaId&r=rot&s=WxH&sc=N&lk=1&g=grid&el=1&eb=0&fc=1&t=baseInches&rh=heightInches&label=Name&place=Town
+/?b=W,S,E,N&sh=shape&ol=1&ra=areaId&r=rot&s=WxH&sc=N&lk=1&g=grid&el=1&eb=0&fc=1&t=baseInches&pl=liftInches&rh=heightInches&label=Name&place=Town
 ```
 
 | Key     | Meaning                                                |
@@ -273,7 +281,8 @@ are fused in by position dedup so the export stays a single solid.
 | `g`     | grid size (omitted at the default 256)                 |
 | `el`    | `1` to engrave the plinth label + compass              |
 | `eb`    | `0` to disable the bottom brand engraving (on by default) |
-| `t`     | base thickness, inches                                 |
+| `t`     | base thickness under the lowest ground, inches, when there is no name plate |
+| `pl`    | height of the lowest ground above the name plate's plinth, inches (omitted at the default 0) |
 | `rh`    | model height, base to peak, in inches                  |
 | `ol`    | `1` for the Resort shape: the outline of ski area `ra`. Ignored without `ra` |
 | `ra`    | ski area id, keeps neighbors out of the outline        |

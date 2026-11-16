@@ -66,11 +66,12 @@ export function buildColorBodies(
       pieces.set(color, [...(pieces.get(color) ?? []), solid]);
     };
 
-    const lifted = own(built.terrain.translate([0, built.plinthHeight, 0]));
+    const lifted = own(built.terrain.translate([0, built.terrainLift, 0]));
     if (secondAms && treelineY !== null) {
-      const [upper, lower] = lifted.splitByPlane([0, 1, 0], treelineY + built.plinthHeight);
+      const [upper, lower] = lifted.splitByPlane([0, 1, 0], treelineY + built.terrainLift);
       add("white", own(upper));
-      add("forest", own(lower));
+      // The terrain's seat overlaps the plinth, which stays white.
+      add("forest", built.plinth ? own(m.Manifold.difference(own(lower), built.plinth)) : own(lower));
     } else {
       add("white", lifted);
     }
@@ -80,7 +81,7 @@ export function buildColorBodies(
     const colorFor = (key: string) =>
       secondAms ? (SECOND_AMS_MERGES[key] ?? key) : oneAmsColor(key, usesRed);
     for (const inlay of built.colorInlays) {
-      add(colorFor(inlay.key), own(inlay.solid.translate([0, built.plinthHeight, 0])));
+      add(colorFor(inlay.key), own(inlay.solid.translate([0, built.terrainLift, 0])));
     }
     for (const glyph of built.inlays) add("black", glyph);
 

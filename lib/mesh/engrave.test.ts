@@ -6,11 +6,11 @@ import * as opentype from "opentype.js";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import type { ElevationResponse } from "@/lib/elevation/types";
-import type { Shape } from "@/lib/shape";
+import { pointInShape, shapeAABBHalf, type Shape } from "@/lib/shape";
 import type { Bbox } from "@/lib/types";
 
 import { compassRoseContours } from "./compass";
-import { buildModelSolids, cutBrand, unionForExport } from "./engrave";
+import { buildModelSolids, cutBrand, terrainBaseInches, terrainLiftInches, unionForExport } from "./engrave";
 import { extrudeContours, withSolids } from "./manifold";
 import {
   buildNameplateSolids,
@@ -21,9 +21,9 @@ import {
   plateTurnDeg,
   roseDiameterInches,
 } from "./nameplate";
-import { buildPlinthSolid, plinthHeightInches, RIM_IN } from "./plinth";
+import { buildPlinthSolid, plinthHeightInches, RIM_IN, TERRAIN_SEAT_IN } from "./plinth";
 import { MIN_CAPITALS_CAP_IN, MIN_TEXT_CAP_IN } from "./printable";
-import { buildShapedWatertight, buildWatertight } from "./watertight";
+import { buildShapedWatertight, buildWatertight, lowestKeptElevation } from "./watertight";
 
 type Toplevel = Awaited<ReturnType<typeof Module>>;
 let m: Toplevel;
@@ -430,7 +430,9 @@ describe("buildModelSolids", () => {
       { shape: "rectangle", ...base, label: "Jay Peak", plinth: true, brand: true },
     );
     const union = unionForExport(m, built);
-    withSolids([built.terrain, built.plinth!, ...built.inlays, union], () => {
+    const lifted = built.terrain.translate([0, built.terrainLift, 0]);
+    const seated = m.Manifold.intersection(lifted, built.plinth!);
+    withSolids([built.terrain, built.plinth!, ...built.inlays, union, lifted, seated], () => {
       expect(built.plinth!.status()).toBe("NoError");
       // One per visible glyph (the space has no outline) plus the rose.
       expect(built.inlays.length).toBe(built.nameplate!.text.replace(/\s/g, "").length + 1);
@@ -440,7 +442,112 @@ describe("buildModelSolids", () => {
       expect(built.plinth!.volume()).toBeLessThan(plain.volume());
       plain.delete();
       expect(union.status()).toBe("NoError");
-      expect(union.volume()).toBeCloseTo(built.terrain.volume() + built.plinth!.volume(), 3);
+      // The terrain's seat is the only volume the two share.
+      expect(seated.boundingBox().max[1]).toBeCloseTo(plinthHeightInches(), 6);
+      expect(seated.boundingBox().min[1]).toBeCloseTo(plinthHeightInches() - TERRAIN_SEAT_IN, 6);
+      expect(union.volume()).toBeCloseTo(built.terrain.volume() + built.plinth!.volume() - seated.volume(), 3);
+      expect(union.decompose().map((s) => { const v = s.volume(); s.delete(); return v; })).toHaveLength(1);
+    });
+  });
+
+  it.each([0, 0.1])("puts the lowest ground %s in above the plinth's top", (plinthLiftInches) => {
+    const baseThicknessInches = terrainBaseInches({ plinth: true, plinthLiftInches, baseThicknessInches: 0.25 });
+    const data = hill(40);
+    const { vertexData } = buildWatertight({
+      ...base,
+      bbox,
+      data,
+      baseThicknessInches,
+      verticalExaggeration: 2,
+      floorElevation: Math.min(...data.heights),
+    });
+    const built = buildModelSolids(
+      m,
+      font,
+      { positions: vertexData.positions!, indices: vertexData.indices! },
+      { shape: "rectangle", ...base, label: "Jay Peak", plinth: true, brand: false },
+    );
+    const lifted = built.terrain.translate([0, built.terrainLift, 0]);
+    const union = unionForExport(m, built);
+    withSolids([built.terrain, built.plinth!, ...built.inlays, lifted, union], () => {
+      expect(built.terrainLift).toBeCloseTo(terrainLiftInches(true, false), 9);
+      // The hill's corners are its lowest ground: the wall under them is the lift and no more.
+      const mesh = lifted.getMesh();
+      let lowestSurface = Infinity;
+      for (let v = 0; v < mesh.numVert; v++) {
+        const y = mesh.vertProperties[v * mesh.numProp + 1];
+        if (y > built.terrainLift + 1e-6) lowestSurface = Math.min(lowestSurface, y);
+      }
+      expect(lowestSurface).toBeCloseTo(plinthHeightInches() + plinthLiftInches, 2);
+      expect(lifted.boundingBox().min[1]).toBeCloseTo(plinthHeightInches() - TERRAIN_SEAT_IN, 6);
+      expect(union.status()).toBe("NoError");
+      expect(union.decompose().map((s) => { const v = s.volume(); s.delete(); return v; })).toHaveLength(1);
+    });
+  });
+
+  it.each<[Shape, number]>([
+    ["circle", 0],
+    ["hexagon", 0],
+    ["rectangle", 30],
+  ])("starts a %s turned %s° at the plinth's top exactly", (shape, rotation) => {
+    const data = hill(40);
+    const side = { ...base, heightInches: shape === "hexagon" ? 6 * 0.866 : 6, rotation };
+    const [halfW, halfH] = shapeAABBHalf(shape, side.widthInches, side.heightInches, rotation);
+    const floorElevation = lowestKeptElevation(data, halfW * 2, halfH * 2, {
+      inShape: (x, z) => pointInShape(shape, x, z, side.widthInches, side.heightInches, rotation),
+    });
+    const { vertexData } = buildShapedWatertight(
+      {
+        ...side,
+        bbox,
+        data,
+        baseThicknessInches: terrainBaseInches({ plinth: true, plinthLiftInches: 0, baseThicknessInches: 0.25 }),
+        verticalExaggeration: 2,
+        floorElevation,
+      },
+      shape,
+      rotation,
+    );
+    const built = buildModelSolids(
+      m,
+      font,
+      { positions: vertexData.positions!, indices: vertexData.indices! },
+      { shape, ...side, label: "Jay Peak", plinth: true, brand: true },
+    );
+    const union = unionForExport(m, built);
+    withSolids([built.terrain, built.plinth!, ...built.inlays, union], () => {
+      const mesh = built.terrain.getMesh();
+      let lowestSurface = Infinity;
+      for (let v = 0; v < mesh.numVert; v++) {
+        const y = mesh.vertProperties[v * mesh.numProp + 1];
+        if (y > 1e-6) lowestSurface = Math.min(lowestSurface, y);
+      }
+      expect(lowestSurface + built.terrainLift).toBeCloseTo(plinthHeightInches(), 6);
+      expect(union.status()).toBe("NoError");
+      expect(union.decompose().map((s) => { const v = s.volume(); s.delete(); return v; })).toHaveLength(1);
+    });
+  });
+
+  it("builds on the seat alone when the height above the plate is not a usable number", () => {
+    const on = { plinth: true, baseThicknessInches: 0.25 };
+    expect(terrainBaseInches({ ...on, plinthLiftInches: -1 })).toBe(TERRAIN_SEAT_IN);
+    expect(terrainBaseInches({ ...on, plinthLiftInches: NaN })).toBe(TERRAIN_SEAT_IN);
+    expect(terrainBaseInches({ ...on, plinthLiftInches: 0.1 })).toBeCloseTo(TERRAIN_SEAT_IN + 0.1, 9);
+    expect(terrainBaseInches({ ...on, plinth: false, plinthLiftInches: 0.1 })).toBe(0.25);
+  });
+
+  it("leaves the plinth whole under a sliver too narrow to seat", () => {
+    const { vertexData } = buildWatertight({ ...base, bbox, data: hill(40), baseThicknessInches: TERRAIN_SEAT_IN, verticalExaggeration: 2 });
+    const sliver: [number, number][] = [[-1, -0.004], [1, -0.004], [1, 0.004], [-1, 0.004]];
+    const built = buildModelSolids(
+      m,
+      font,
+      { positions: vertexData.positions!, indices: vertexData.indices! },
+      { shape: "rectangle", ...base, label: "Jay Peak", plinth: true, brand: false, outline: sliver },
+    );
+    withSolids([built.terrain, built.plinth!, ...built.inlays], () => {
+      expect(built.plinth!.status()).toBe("NoError");
+      expect(built.plinth!.volume()).toBeGreaterThan(0);
     });
   });
 
@@ -477,7 +584,7 @@ describe("buildModelSolids", () => {
     );
     withSolids([built.terrain], () => {
       expect(built.plinth).toBeNull();
-      expect(built.plinthHeight).toBe(0);
+      expect(built.terrainLift).toBe(0);
       expect(built.terrain.status()).toBe("NoError");
     });
   });

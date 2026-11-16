@@ -11,6 +11,8 @@
 export const DEFAULT_RELIEF_INCHES = 0.75;
 export const MIN_RELIEF_INCHES = 0.25;
 export const MAX_RELIEF_INCHES = 4;
+/** Most the lowest ground can be raised above the name plate's plinth. */
+export const MAX_PLINTH_LIFT_INCHES = 2;
 export const MIN_COVERAGE_METERS = 500;
 export const MAX_COVERAGE_METERS = 50_000;
 
