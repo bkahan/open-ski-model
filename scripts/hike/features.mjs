@@ -15,7 +15,18 @@ export const MIN_INDEXED_TRAIL_KM = 0.5;
 const SAME_TRAIL_REACH_DEG = 0.005;
 
 const NO_ENTRY = new Set(["no", "private", "discouraged"]);
-const PAVED = new Set(["asphalt", "concrete", "concrete:plates", "concrete:lanes", "paved", "paving_stones", "sett"]);
+const PAVED = new Set([
+  "asphalt",
+  "brick",
+  "cobblestone",
+  "concrete",
+  "concrete:lanes",
+  "concrete:plates",
+  "paved",
+  "paving_stones",
+  "sett",
+]);
+const FEET_TO_METERS = 0.3048;
 // Mapped as natural=water, but a riverbank is not a lake.
 const FLOWING_WATER = new Set(["river", "stream", "canal", "ditch", "drain"]);
 const HUTS = new Set(["alpine_hut", "wilderness_hut"]);
@@ -97,15 +108,15 @@ function onFootAllowed(tags) {
 }
 
 /**
- * Whether a path or footway is a hiking trail. Every highway=path that is
- * open to walkers and not paved counts. highway=footway is mostly
- * sidewalks and park paths, so one counts only when it is unpaved, is not
- * a sidewalk or crossing, and carries a name or a hiking tag.
+ * Whether a path or footway is a hiking trail. A highway=path counts when
+ * it is open to walkers, not paved and not a sidewalk or crossing.
+ * highway=footway is mostly sidewalks and park paths, so one must also
+ * carry a name or a hiking tag.
  */
 export function isHikingTrail(tags) {
-  if (!onFootAllowed(tags) || PAVED.has(tags.surface)) return false;
+  if (!onFootAllowed(tags) || PAVED.has(tags.surface) || tags.footway) return false;
   if (tags.highway === "path") return true;
-  if (tags.highway !== "footway" || tags.footway) return false;
+  if (tags.highway !== "footway") return false;
   return Boolean(tags.name || tags.sac_scale || tags.trail_visibility);
 }
 
@@ -130,10 +141,15 @@ function poiKind(tags) {
   return null;
 }
 
-/** Meters, or null for anything that is not a plausible elevation. */
+/**
+ * Meters, or null for anything that is not a plausible elevation. ele=*
+ * is meters unless it says feet, which some US peaks do.
+ */
 export function parseElevation(raw) {
-  if (typeof raw !== "string" || !/^-?\d+(\.\d+)?( ?m)?$/.test(raw.trim())) return null;
-  const meters = Number.parseFloat(raw);
+  const match = typeof raw === "string" ? /^(-?\d+(?:\.\d+)?) ?(m|ft|')?$/.exec(raw.trim()) : null;
+  if (!match) return null;
+  const inFeet = match[2] === "ft" || match[2] === "'";
+  const meters = Number.parseFloat(match[1]) * (inFeet ? FEET_TO_METERS : 1);
   return meters > -500 && meters < 9000 ? Math.round(meters) : null;
 }
 

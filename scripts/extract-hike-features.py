@@ -43,14 +43,45 @@ KEEP_TAGS = [
 ]
 
 
-def feature_id(obj):
-    if obj.is_node():
-        return f"n{obj.id}"
-    if obj.is_way():
-        return f"w{obj.id}"
-    if obj.is_area():
-        return f"{'w' if obj.from_way() else 'r'}{obj.orig_id()}"
-    return None
+class HikeFeatures(osmium.SimpleHandler):
+    """Writes each selected object as a line of GeoJSON.
+
+    A closed way arrives twice, as a way (LineString) and as an area
+    (MultiPolygon), under the same id. Extracts are cut along state lines
+    and can hold ways whose nodes fell outside; those are skipped and
+    counted, not allowed to stop the run.
+    """
+
+    def __init__(self, out, region):
+        super().__init__()
+        self.out = out
+        self.region = region
+        self.geojson = osmium.geom.GeoJSONFactory()
+        self.written = 0
+        self.skipped = 0
+
+    def emit(self, fid, tags, make_geometry):
+        try:
+            geometry = json.loads(make_geometry())
+        except (osmium.InvalidLocationError, RuntimeError):
+            self.skipped += 1
+            return
+        properties = {key: tags[key] for key in KEEP_TAGS if key in tags}
+        properties["region"] = self.region
+        feature = {"type": "Feature", "id": fid, "properties": properties, "geometry": geometry}
+        self.out.write(json.dumps(feature, ensure_ascii=False, separators=(",", ":")))
+        self.out.write("\n")
+        self.written += 1
+
+    def node(self, n):
+        self.emit(f"n{n.id}", n.tags, lambda: self.geojson.create_point(n))
+
+    def way(self, w):
+        self.emit(f"w{w.id}", w.tags, lambda: self.geojson.create_linestring(w))
+
+    def area(self, a):
+        fid = f"{'w' if a.from_way() else 'r'}{a.orig_id()}"
+        self.emit(fid, a.tags, lambda: self.geojson.create_multipolygon(a))
 
 
 def main():
@@ -58,27 +89,12 @@ def main():
         sys.exit("usage: extract-hike-features.py <in.osm.pbf> <region> <out.geojsonseq>")
     source, region, target = sys.argv[1:]
 
-    features = (
-        osmium.FileProcessor(source)
-        .with_locations()
-        .with_areas()
-        .with_filter(osmium.filter.TagFilter(*SELECT))
-        .with_filter(osmium.filter.GeoInterfaceFilter(tags=KEEP_TAGS))
-    )
-
-    written = 0
     with open(target, "a", encoding="utf-8") as out:
-        for obj in features:
-            fid = feature_id(obj)
-            if fid is None:
-                continue
-            feature = obj.__geo_interface__
-            feature["id"] = fid
-            feature["properties"]["region"] = region
-            out.write(json.dumps(feature, ensure_ascii=False, separators=(",", ":")))
-            out.write("\n")
-            written += 1
-    print(f"{region}: {written} features from {source}")
+        handler = HikeFeatures(out, region)
+        handler.apply_file(source, locations=True, filters=[osmium.filter.TagFilter(*SELECT)])
+    print(f"{region}: {handler.written} features from {source}, {handler.skipped} skipped for missing nodes")
+    if handler.written == 0:
+        sys.exit(f"{region}: no hiking features in {source}")
 
 
 if __name__ == "__main__":

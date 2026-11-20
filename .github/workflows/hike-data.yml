@@ -65,11 +65,17 @@ jobs:
         env:
           REGIONS: ${{ inputs.regions }}
       - run: node --max-old-space-size=6144 scripts/build-hike-data.mjs out features.geojsonseq
+      - name: Report sizes
+        # No file may pass 20 MB: past that the CDN may refuse to serve it,
+        # and a cell that large is too much for one request anyway.
+        run: |
+          cat out/metadata.json
+          du -sh out
+          find out -type f -printf '%s %p\n' | sort -n | tail -5
+          test -z "$(find out -type f -size +20M)"
       - name: Publish to hike-data branch
         run: |
           cd out
-          cat metadata.json
-          du -sh . cells/*/* | sort -h | tail -5
           git init -q -b hike-data
           git config user.name "hike-data bot"
           git config user.email "actions@github.com"

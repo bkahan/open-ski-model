@@ -10,7 +10,7 @@ import {
   cellsTouching,
   extentOf,
   fetchGzipJson,
-  fetchJson,
+  fetchRequiredJson,
   foldName,
   intersects,
   lineBbox,
@@ -100,10 +100,8 @@ export async function fetchCell(lat: number, lng: number): Promise<Cell> {
   return (await fetchGzipJson<Cell>(`${dataBaseUrl()}/cells/${lat}/${lng}.json.gz`)) ?? EMPTY_CELL;
 }
 
-export async function fetchIndex(): Promise<Index> {
-  const index = await fetchJson<Index>(`${dataBaseUrl()}/ski-areas.json`);
-  if (!index) throw new Error("ski-areas.json missing from data branch");
-  return index;
+export function fetchIndex(): Promise<Index> {
+  return fetchRequiredJson<Index>(`${dataBaseUrl()}/ski-areas.json`);
 }
 
 /** Merge cells into ResortData, keeping only features that touch `bbox`. */

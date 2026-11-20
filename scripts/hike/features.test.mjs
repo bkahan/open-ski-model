@@ -26,6 +26,7 @@ describe("isHikingTrail", () => {
     expect(isHikingTrail({ highway: "path" })).toBe(true);
     expect(isHikingTrail({ highway: "path", surface: "ground" })).toBe(true);
     expect(isHikingTrail({ highway: "path", surface: "asphalt" })).toBe(false);
+    expect(isHikingTrail({ highway: "path", footway: "sidewalk" })).toBe(false);
   });
 
   it("takes a footway only when it is named or hiking-tagged, and not a sidewalk", () => {
@@ -83,8 +84,13 @@ describe("parseElevation", () => {
     expect(parseElevation("-12")).toBe(-12);
   });
 
-  it("refuses feet, ranges, junk and impossible heights", () => {
-    expect(parseElevation("6288 ft")).toBeNull();
+  it("converts feet when the tag says so", () => {
+    expect(parseElevation("6288 ft")).toBe(1917);
+    expect(parseElevation("6288'")).toBe(1917);
+  });
+
+  it("refuses ranges, junk and impossible heights", () => {
+    expect(parseElevation("1900-1917")).toBeNull();
     expect(parseElevation("6,288")).toBeNull();
     expect(parseElevation("about 1900")).toBeNull();
     expect(parseElevation("19166")).toBeNull();

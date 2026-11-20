@@ -8,7 +8,7 @@ import {
   cellsTouching,
   extentOf,
   fetchGzipJson,
-  fetchJson,
+  fetchRequiredJson,
   foldName,
   intersects,
   lineBbox,
@@ -69,19 +69,29 @@ interface Index {
   places: IndexPlace[];
 }
 
-export function hikeDataBaseUrl(): string {
+function hikeDataBaseUrl(): string {
   return (process.env.HIKE_DATA_BASE ?? DEFAULT_BASE).replace(/\/$/, "");
 }
 
-const EMPTY_CELL: Cell = { v: 1, trails: [], pois: [], water: [] };
+const FORMAT_VERSION = 1;
+const EMPTY_CELL: Cell = { v: FORMAT_VERSION, trails: [], pois: [], water: [] };
+
+function checkVersion(file: { v: number }, url: string): void {
+  if (file.v !== FORMAT_VERSION) throw new Error(`${url}: format v${file.v}, this build reads v${FORMAT_VERSION}`);
+}
 
 async function fetchCell(lat: number, lng: number): Promise<Cell> {
-  return (await fetchGzipJson<Cell>(`${hikeDataBaseUrl()}/cells/${lat}/${lng}.json.gz`)) ?? EMPTY_CELL;
+  const url = `${hikeDataBaseUrl()}/cells/${lat}/${lng}.json.gz`;
+  const cell = await fetchGzipJson<Cell>(url);
+  if (!cell) return EMPTY_CELL;
+  checkVersion(cell, url);
+  return cell;
 }
 
 async function fetchIndex(): Promise<Index> {
-  const index = await fetchJson<Index>(`${hikeDataBaseUrl()}/hike-places.json`);
-  if (!index) throw new Error("hike-places.json missing from hike-data branch");
+  const url = `${hikeDataBaseUrl()}/hike-places.json`;
+  const index = await fetchRequiredJson<Index>(url);
+  checkVersion(index, url);
   return index;
 }
 

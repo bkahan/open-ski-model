@@ -6,7 +6,7 @@ import { gunzipSync } from "node:zlib";
 
 import type { Bbox, LngLat } from "@/lib/types";
 
-export const CELL_DEG = 1;
+const CELL_DEG = 1;
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 256;
 const FETCH_TIMEOUT_MS = 15_000;
@@ -28,13 +28,12 @@ function cached<T>(url: string, load: () => Promise<T>): Promise<T> {
     cache.delete(oldest);
   }
 
-  const entry = { at: now, value: undefined as unknown as Promise<unknown> };
-  entry.value = load().catch((err: unknown) => {
-    if (cache.get(url) === entry) cache.delete(url);
+  const value: Promise<T> = load().catch((err: unknown) => {
+    if (cache.get(url)?.value === value) cache.delete(url);
     throw err;
   });
-  cache.set(url, entry);
-  return entry.value as Promise<T>;
+  cache.set(url, { at: now, value });
+  return value;
 }
 
 async function fetchBytes(url: string): Promise<ArrayBuffer | null> {
@@ -52,11 +51,16 @@ export function fetchGzipJson<T>(url: string): Promise<T | null> {
   });
 }
 
-/** A plain JSON file, cached; null when the data branch has no such file. */
-export function fetchJson<T>(url: string): Promise<T | null> {
+/**
+ * A plain JSON file the dataset cannot do without. Its absence throws
+ * inside the cache, so it is asked for again on the next call instead of
+ * staying missing for the TTL.
+ */
+export function fetchRequiredJson<T>(url: string): Promise<T> {
   return cached(url, async () => {
     const bytes = await fetchBytes(url);
-    return bytes ? (JSON.parse(Buffer.from(bytes).toString("utf8")) as T) : null;
+    if (!bytes) throw new Error(`${url}: not found`);
+    return JSON.parse(Buffer.from(bytes).toString("utf8")) as T;
   });
 }
 
@@ -101,7 +105,7 @@ export function extentOf(lines: LngLat[][]): Bbox | null {
 export function foldName(s: string): string {
   return s
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
 }
@@ -111,6 +115,7 @@ export function foldName(s: string): string {
  * prefix, 1 substring, 0 no match.
  */
 export function nameMatchScore(name: string, foldedQuery: string): number {
+  if (!foldedQuery) return 0;
   const folded = foldName(name);
   if (folded === foldedQuery) return 4;
   if (folded.startsWith(foldedQuery)) return 3;

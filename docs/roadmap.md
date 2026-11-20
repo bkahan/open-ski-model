@@ -297,13 +297,13 @@ trails but no layer for lakes, so one source covers everything instead.
   the `hike-data` branch, apart from `data` so neither build can
   overwrite the other.
 - What counts (`scripts/hike/features.mjs`, unit tested):
-  - Trail: `highway=path` that is open to walkers and not paved. A
-    `highway=footway` counts only when it is also not a sidewalk or
-    crossing and has a name, `sac_scale` or `trail_visibility`.
+  - Trail: `highway=path` that is open to walkers, not paved and not a
+    sidewalk or crossing. A `highway=footway` must also have a name,
+    `sac_scale` or `trail_visibility`.
     `access` or `foot` of `no`, `private` or `discouraged` drops a way;
     `foot` outranks `access`. `informal=yes` is kept and flagged.
-  - Peak: `natural=peak` with a name. Elevation is read when it is
-    plain meters.
+  - Peak: `natural=peak` with a name. Elevation is read in meters, or
+    feet when the tag says so.
   - Hut: `tourism=alpine_hut` or `wilderness_hut`. Trailhead:
     `highway=trailhead`.
   - Lake: `natural=water` of 1,000 m² or more, not a river, stream,
@@ -315,9 +315,18 @@ trails but no layer for lakes, so one source covers everything instead.
   `lib/data/static-data.ts` holds what it shares with the ski reader.
 - Not in the data: a tree line. OpenStreetMap rarely maps one, so the
   alpine zone (H4) will come from elevation, as the forest color does.
-- Not verified: the scripts have only run on a hand-made OSM file. The
+- Ways whose nodes are missing from an extract are skipped and counted.
+- Not verified: the scripts have only run on hand-made OSM files. The
   Geofabrik URLs, the run time, and the size of the cells and the index
-  are unknown until the Action's first run.
+  are unknown until the Action's first run. The Action fails if any
+  file passes 20 MB.
+- Open after the first run:
+  - Cell size. Both readers share one cache of 256 parsed files; if
+    hiking cells are large it needs its own, smaller budget.
+  - Left out for now: `highway=steps`, `track` and `bridleway` (short
+    gaps where a trail climbs a ledge or follows a woods road), and
+    lean-tos (`amenity=shelter`), which are most of the shelters in the
+    Northeast outside the AMC huts.
 
 ### Phase H2: hike mode
 

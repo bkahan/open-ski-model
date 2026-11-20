@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { gzipSync } from "node:zlib";
 
-import { assembleHike, searchPlaces } from "./hikedata";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { assembleHike, loadHikeData, searchPlaces } from "./hikedata";
 
 type Line = [number, number][];
 
@@ -102,5 +104,32 @@ describe("searchPlaces", () => {
   it("honors the limit and returns nothing for a blank query", () => {
     expect(searchPlaces(index, "washington", 2)).toHaveLength(2);
     expect(searchPlaces(index, "  ")).toEqual([]);
+  });
+});
+
+describe("loadHikeData", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("reads the cells under the bbox and treats a missing one as empty", async () => {
+    vi.stubEnv("HIKE_DATA_BASE", "https://hike.test/a/");
+    const fetchMock = vi.fn(async (url: string) =>
+      url.endsWith("/cells/44/-72.json.gz") ? new Response(gzipSync(JSON.stringify(cellA))) : new Response(null, { status: 404 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const data = await loadHikeData([-72.1, 44.2, -71.2, 44.4]);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://hike.test/a/cells/44/-73.json.gz",
+      "https://hike.test/a/cells/44/-72.json.gz",
+    ]);
+    expect(data.trails.map((t) => t.id)).toEqual(["w1", "w2"]);
+  });
+
+  it("refuses a cell written in a format it does not know", async () => {
+    vi.stubEnv("HIKE_DATA_BASE", "https://hike.test/b");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(gzipSync(JSON.stringify({ ...cellA, v: 2 })))));
+    await expect(loadHikeData(bbox)).rejects.toThrow("format v2");
   });
 });
