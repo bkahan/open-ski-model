@@ -6,8 +6,16 @@
 // point: the public Overpass instances were rejecting even trivial
 // queries under load.
 
-import { gunzipSync } from "node:zlib";
-
+import {
+  cellsTouching,
+  extentOf,
+  fetchGzipJson,
+  fetchJson,
+  foldName,
+  intersects,
+  lineBbox,
+  nameMatchScore,
+} from "@/lib/data/static-data";
 import type { Bbox, LngLat } from "@/lib/types";
 
 import type {
@@ -21,9 +29,6 @@ import type {
 } from "./types";
 
 const DEFAULT_BASE = "https://cdn.jsdelivr.net/gh/bkahan/open-ski-model@data";
-const CELL_DEG = 1;
-const CACHE_TTL_MS = 60 * 60 * 1000;
-const FETCH_TIMEOUT_MS = 15_000;
 
 // Wire format written by the build script.
 interface CellRun {
@@ -89,83 +94,16 @@ export function dataBaseUrl(): string {
   return (process.env.SKI_DATA_BASE ?? DEFAULT_BASE).replace(/\/$/, "");
 }
 
-const CACHE_MAX_ENTRIES = 256;
-const cache = new Map<string, { at: number; value: Promise<unknown> }>();
-
-/** Fetch + parse once per URL per TTL; concurrent callers share the promise. */
-function cached<T>(url: string, load: () => Promise<T>): Promise<T> {
-  const now = Date.now();
-  const hit = cache.get(url);
-  if (hit && now - hit.at < CACHE_TTL_MS) return hit.value as Promise<T>;
-
-  for (const [k, v] of cache) {
-    if (now - v.at >= CACHE_TTL_MS) cache.delete(k);
-  }
-  while (cache.size >= CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next().value;
-    if (oldest === undefined) break;
-    cache.delete(oldest);
-  }
-
-  const entry = { at: now, value: undefined as unknown as Promise<unknown> };
-  entry.value = load().catch((err: unknown) => {
-    if (cache.get(url) === entry) cache.delete(url);
-    throw err;
-  });
-  cache.set(url, entry);
-  return entry.value as Promise<T>;
-}
-
-async function fetchBytes(url: string): Promise<ArrayBuffer | null> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-  return res.arrayBuffer();
-}
-
 const EMPTY_CELL: Cell = { v: 1, runs: [], lifts: [] };
 
-export function fetchCell(lat: number, lng: number): Promise<Cell> {
-  const url = `${dataBaseUrl()}/cells/${lat}/${lng}.json.gz`;
-  return cached(url, async () => {
-    const bytes = await fetchBytes(url);
-    if (!bytes) return EMPTY_CELL;
-    return JSON.parse(gunzipSync(Buffer.from(bytes)).toString("utf8")) as Cell;
-  });
+export async function fetchCell(lat: number, lng: number): Promise<Cell> {
+  return (await fetchGzipJson<Cell>(`${dataBaseUrl()}/cells/${lat}/${lng}.json.gz`)) ?? EMPTY_CELL;
 }
 
-export function fetchIndex(): Promise<Index> {
-  const url = `${dataBaseUrl()}/ski-areas.json`;
-  return cached(url, async () => {
-    const bytes = await fetchBytes(url);
-    if (!bytes) throw new Error("ski-areas.json missing from data branch");
-    return JSON.parse(Buffer.from(bytes).toString("utf8")) as Index;
-  });
-}
-
-export function cellsTouching([w, s, e, n]: Bbox): Array<[number, number]> {
-  const out: Array<[number, number]> = [];
-  for (let lat = Math.floor(s / CELL_DEG); lat <= Math.floor(n / CELL_DEG); lat++) {
-    for (let lng = Math.floor(w / CELL_DEG); lng <= Math.floor(e / CELL_DEG); lng++) {
-      out.push([lat, lng]);
-    }
-  }
-  return out;
-}
-
-function lineBbox(coords: LngLat[]): Bbox {
-  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
-  for (const [x, y] of coords) {
-    if (x < w) w = x;
-    if (x > e) e = x;
-    if (y < s) s = y;
-    if (y > n) n = y;
-  }
-  return [w, s, e, n];
-}
-
-function intersects(a: Bbox, b: Bbox): boolean {
-  return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+export async function fetchIndex(): Promise<Index> {
+  const index = await fetchJson<Index>(`${dataBaseUrl()}/ski-areas.json`);
+  if (!index) throw new Error("ski-areas.json missing from data branch");
+  return index;
 }
 
 /** Merge cells into ResortData, keeping only features that touch `bbox`. */
@@ -213,7 +151,7 @@ export function assembleResort(cells: Cell[], bbox: Bbox): ResortData {
     runs: runList,
     lifts: liftList,
     bbox,
-    extent: extentOf([...runList, ...liftList]),
+    extent: extentOf([...runList, ...liftList].map((line) => line.coords)),
     convention: majorityConvention(runList),
   };
 }
@@ -221,18 +159,6 @@ export function assembleResort(cells: Cell[], bbox: Bbox): ResortData {
 export async function loadResortData(bbox: Bbox): Promise<ResortData> {
   const cells = await Promise.all(cellsTouching(bbox).map(([lat, lng]) => fetchCell(lat, lng)));
   return assembleResort(cells, bbox);
-}
-
-function extentOf(features: Array<{ coords: LngLat[] }>): Bbox | null {
-  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
-  for (const f of features) {
-    const b = lineBbox(f.coords);
-    if (b[0] < w) w = b[0];
-    if (b[1] < s) s = b[1];
-    if (b[2] > e) e = b[2];
-    if (b[3] > n) n = b[3];
-  }
-  return Number.isFinite(w) ? [w, s, e, n] : null;
 }
 
 function majorityConvention(runs: SkiRun[]): RunConvention | null {
@@ -251,28 +177,14 @@ function majorityConvention(runs: SkiRun[]): RunConvention | null {
 
 // --- Search ---
 
-function fold(s: string): string {
-  return s
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .trim();
-}
-
 /** Rank ski areas by name match: exact, prefix, word prefix, substring. */
 export function searchIndex(index: Index, query: string, limit = 8): SkiAreaHit[] {
-  const q = fold(query);
+  const q = foldName(query);
   if (!q) return [];
   const scored: Array<{ score: number; area: IndexArea }> = [];
   for (const area of index.areas) {
-    const name = fold(area.n);
-    let score: number;
-    if (name === q) score = 4;
-    else if (name.startsWith(q)) score = 3;
-    else if (name.split(/[\s-]+/).some((w) => w.startsWith(q))) score = 2;
-    else if (name.includes(q)) score = 1;
-    else continue;
-    scored.push({ score, area });
+    const score = nameMatchScore(area.n, q);
+    if (score > 0) scored.push({ score, area });
   }
   // The index is already sorted by run count, so a stable sort by score
   // keeps the bigger resort first within a tier.

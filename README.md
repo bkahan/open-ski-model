@@ -174,6 +174,14 @@ work against a local build of it, run
 one download per day is their limit), serve `out/` with any static
 server, and set `SKI_DATA_BASE` to its URL in `.env.local`.
 
+Hiking data (trails, peaks, huts, lakes) is built the same way onto the
+`hike-data` branch by `.github/workflows/hike-data.yml`; nothing in the
+app reads it yet. For a local build: `pip install osmium`, run
+`python scripts/extract-hike-features.py <state>.osm.pbf NH features.geojsonseq`
+on a [Geofabrik](https://download.geofabrik.de/north-america/us.html)
+extract, then `node scripts/build-hike-data.mjs out features.geojsonseq`,
+and set `HIKE_DATA_BASE`.
+
 Open <http://localhost:3000>.
 
 > `npm run dev` and `npm run build` pass `--webpack` because Next 16
@@ -345,8 +353,16 @@ lib/
     geojson.ts             Resort data → GeoJSON for the map
     settings.ts            Run settings defaults + limits
     types.ts               Run / lift / response types
+  hike/
+    hikedata.ts            Hike-data-branch cell reader + place search (server)
+    types.ts               Trail / peak / hut / lake types
+  data/
+    static-data.ts         Cached fetches, cell math, name search shared by both readers
 scripts/
   build-ski-data.mjs       OpenSkiData → cells + index (run by the Action)
+  extract-hike-features.py OpenStreetMap extract → hiking features (pyosmium)
+  build-hike-data.mjs      Hiking features → cells + index (run by the Action)
+  hike/features.mjs        Which OSM features the hiking data keeps
   copy-manifold-wasm.mjs   Copies manifold.wasm into public/
 lib/mesh/
     manifold.ts            Manifold (WASM) loader + mesh conversions

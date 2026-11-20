@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { assembleResort, cellsTouching, searchIndex } from "./skidata";
+import { assembleResort, searchIndex } from "./skidata";
 
 const bbox: [number, number, number, number] = [-72.55, 44.9, -72.45, 44.96];
 
@@ -60,18 +60,6 @@ describe("assembleResort", () => {
     expect(empty.runs).toEqual([]);
     expect(empty.extent).toBeNull();
     expect(empty.convention).toBeNull();
-  });
-});
-
-describe("cellsTouching", () => {
-  it("lists every 1° cell the bbox overlaps", () => {
-    expect(cellsTouching([-72.55, 44.9, -72.45, 44.96])).toEqual([[44, -73]]);
-    expect(cellsTouching([-72.2, 44.9, -71.9, 45.1])).toEqual([
-      [44, -73],
-      [44, -72],
-      [45, -73],
-      [45, -72],
-    ]);
   });
 });
 
