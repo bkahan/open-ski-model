@@ -26,6 +26,11 @@ recorded here.
 | Lift terminals as bumps | Not started | Phase R2 |
 | Zip of per-color STLs | Not started | Phase R3 |
 | Forest areas, snowline, markers, Serwist | Not started | Phase R4 |
+| Hiking data: build scripts, Action, reader | In review, not verified on real data | Hiking trails, H1 |
+| Hike mode: search, trails on the map, range outline | Not started | Hiking trails, H2 |
+| Featured route from a GPX, route and trail colors | Not started | Hiking trails, H3 |
+| Summit, hut and trailhead markers, lakes, alpine zone | Not started | Hiking trails, H4 |
+| Presidential Traverse preset, slicer check, test print | Not started | Hiking trails, H5 |
 
 ## Done
 
@@ -264,6 +269,87 @@ from forest areas in the data.
 - Elevation snowline for single-extruder printers (one filament swap).
 - Double-black / terrain-park markers.
 - Serwist migration to Turbopack (removes `--webpack`).
+
+## Hiking trails
+
+Goal: the same model for a hike. The flagship is the Presidential
+Traverse: the outline traced around the range's trails, the traverse in
+its own color, the other trails in a second, lakes in a third, and the
+alpine zone on a second AMS. Summits, huts and trailheads are dots; peak
+names do not fit at that scale.
+
+AllTrails is not a source: it has no public data API and its terms
+forbid scraping. A user's own route comes in as a GPX file (H3).
+OpenTrailMap draws the same OpenStreetMap data used here; its tile
+service is not open to commercial use without permission. Layercake has
+trails but no layer for lakes, so one source covers everything instead.
+
+### Phase H1: hiking data (in review)
+
+- Source: Geofabrik's OpenStreetMap extracts, one per US state. The
+  Northeast (CT, ME, MA, NH, NJ, NY, PA, RI, VT) to start; the list is
+  `DEFAULT_REGIONS` in `.github/workflows/hike-data.yml`.
+- `scripts/extract-hike-features.py` (pyosmium, pinned in the workflow)
+  selects by tag and resolves geometry, one GeoJSON feature per line.
+  `scripts/build-hike-data.mjs` writes 1° cells of trails, peaks, huts,
+  trailheads and lakes, plus `hike-places.json`, a search index of
+  ranges, named peaks, named trails and named huts. Published weekly on
+  the `hike-data` branch, apart from `data` so neither build can
+  overwrite the other.
+- What counts (`scripts/hike/features.mjs`, unit tested):
+  - Trail: `highway=path` that is open to walkers, not paved and not a
+    sidewalk or crossing. A `highway=footway` must also have a name,
+    `sac_scale` or `trail_visibility`.
+    `access` or `foot` of `no`, `private` or `discouraged` drops a way;
+    `foot` outranks `access`. `informal=yes` is kept and flagged.
+  - Peak: `natural=peak` with a name. Elevation is read in meters, or
+    feet when the tag says so.
+  - Hut: `tourism=alpine_hut` or `wilderness_hut`. Trailhead:
+    `highway=trailhead`.
+  - Lake: `natural=water` of 1,000 m² or more, not a river, stream,
+    canal, ditch or drain. Anything spanning more than 16 cells (the
+    Great Lakes) is skipped.
+  - Index trail: ways with the same name within about 500 m of each
+    other are one entry; entries under 0.5 km are left out.
+- `lib/hike/hikedata.ts` reads cells for a bbox and searches the index.
+  `lib/data/static-data.ts` holds what it shares with the ski reader.
+- Not in the data: a tree line. OpenStreetMap rarely maps one, so the
+  alpine zone (H4) will come from elevation, as the forest color does.
+- Ways whose nodes are missing from an extract are skipped and counted.
+- Not verified: the scripts have only run on hand-made OSM files. The
+  Geofabrik URLs, the run time, and the size of the cells and the index
+  are unknown until the Action's first run. The Action fails if any
+  file passes 20 MB.
+- Open after the first run:
+  - Cell size. Both readers share one cache of 256 parsed files; if
+    hiking cells are large it needs its own, smaller budget.
+  - Left out for now: `highway=steps`, `track` and `bridleway` (short
+    gaps where a trail climbs a ledge or follows a woods road), and
+    lean-tos (`amenity=shelter`), which are most of the shelters in the
+    Northeast outside the AMC huts.
+
+### Phase H2: hike mode
+
+A Ski / Hike switch. Search over the hiking index, trails on the map,
+and the outline traced around the trails with the resort outline code.
+No API route or UI reads the hiking data yet.
+
+### Phase H3: featured route
+
+GPX upload matched onto the trail network and set in its own color. For
+the flagship, a reference traverse assembled from the OpenStreetMap
+trails as well.
+
+### Phase H4: features
+
+Summit, hut and trailhead markers at a printable size, lakes as a color
+region, alpine zone from elevation on the second AMS.
+
+### Phase H5: Presidential Traverse
+
+A ready link, a slicer check and a test print. At about 1:130,000 on a
+256 mm bed a 1.2 mm trail stands for about 150 m, so the trail clusters
+at Pinkham and Crawford Notch will merge without tiling.
 
 ## Known limitations
 

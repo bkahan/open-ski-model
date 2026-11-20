@@ -1,0 +1,86 @@
+name: Hike data
+
+# Rebuilds the static hiking dataset from OpenStreetMap (Geofabrik state
+# extracts) and publishes it on the `hike-data` branch (a single orphan
+# commit, force-pushed, so history stays small). The app reads it through
+# jsDelivr. Kept apart from the `data` branch so the two builds cannot
+# overwrite each other.
+
+on:
+  schedule:
+    - cron: "43 7 * * 0"
+  workflow_dispatch:
+    inputs:
+      regions:
+        description: "Geofabrik US state extracts as slug:CODE, space separated"
+        required: false
+  push:
+    branches: [main]
+    paths:
+      - scripts/build-hike-data.mjs
+      - scripts/extract-hike-features.py
+      - scripts/hike/**
+      - .github/workflows/hike-data.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hike-data
+  cancel-in-progress: false
+
+env:
+  # The Northeast. Add states here to widen coverage.
+  DEFAULT_REGIONS: >-
+    connecticut:CT maine:ME massachusetts:MA new-hampshire:NH new-jersey:NJ
+    new-york:NY pennsylvania:PA rhode-island:RI vermont:VT
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci --ignore-scripts
+      - run: pip install osmium==4.3.2
+      - name: Extract hiking features
+        run: |
+          for region in ${REGIONS:-$DEFAULT_REGIONS}; do
+            slug="${region%%:*}"
+            code="${region##*:}"
+            curl --fail --silent --show-error --location --retry 3 \
+              --user-agent "open-ski-model data build (https://github.com/${GITHUB_REPOSITORY})" \
+              --output extract.osm.pbf \
+              "https://download.geofabrik.de/north-america/us/${slug}-latest.osm.pbf"
+            python scripts/extract-hike-features.py extract.osm.pbf "$code" features.geojsonseq
+            rm extract.osm.pbf
+          done
+        env:
+          REGIONS: ${{ inputs.regions }}
+      - run: node --max-old-space-size=6144 scripts/build-hike-data.mjs out features.geojsonseq
+      - name: Report sizes
+        # No file may pass 20 MB: past that the CDN may refuse to serve it,
+        # and a cell that large is too much for one request anyway.
+        run: |
+          cat out/metadata.json
+          du -sh out
+          find out -type f -printf '%s %p\n' | sort -n | tail -5
+          test -z "$(find out -type f -size +20M)"
+      - name: Publish to hike-data branch
+        run: |
+          cd out
+          git init -q -b hike-data
+          git config user.name "hike-data bot"
+          git config user.email "actions@github.com"
+          git add -A
+          git commit -q -m "Hike data $(date -u +%Y-%m-%d)"
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" hike-data:hike-data
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
